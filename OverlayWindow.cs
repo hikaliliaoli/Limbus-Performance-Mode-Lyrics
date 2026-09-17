@@ -26,7 +26,8 @@ internal sealed class OverlayWindow : Window
     private readonly StackPanel _standardPanel = new()
     {
         HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
-        VerticalAlignment = VerticalAlignment.Center
+        VerticalAlignment = VerticalAlignment.Center,
+        IsHitTestVisible = false
     };
     private readonly Canvas _performanceCanvas = new() { IsHitTestVisible = false };
     private readonly TextBlock _title = NewTextBlock();
@@ -86,6 +87,7 @@ internal sealed class OverlayWindow : Window
     private readonly bool _startInDemo;
     private readonly string? _startupModeOverride;
     private HwndSource? _windowSource;
+    private StandardLineVisual? _draggingStandardLine;
 
     public OverlayWindow(bool startInDemo = false, string? startupModeOverride = null)
     {
@@ -118,6 +120,10 @@ internal sealed class OverlayWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         SourceInitialized += OnSourceInitialized;
+        PreviewMouseLeftButtonDown += OnPreviewMouseLeftButtonDown;
+        PreviewMouseMove += OnPreviewMouseMove;
+        PreviewMouseLeftButtonUp += OnPreviewMouseLeftButtonUp;
+        LostMouseCapture += OnLostMouseCapture;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -421,7 +427,6 @@ internal sealed class OverlayWindow : Window
         var visual = new StandardLineVisual(
             index, container, glyphs, _activeLineStart, _activeLineEnd,
             estimatedWidth, estimatedHeight);
-        AttachStandardLineDragging(visual);
         PositionStandardLine(visual, StandardSlotForLine(index, VisibleLyricsLimit));
         container.SizeChanged += (_, _) =>
         {
@@ -707,6 +712,8 @@ internal sealed class OverlayWindow : Window
 
     private void ClearAllLyrics()
     {
+        if (_draggingStandardLine is not null)
+            FinishStandardLineDrag(savePosition: true);
         _standardLines.Clear();
         _standardLyricsCanvas.Children.Clear();
         _previous.Text = string.Empty;
@@ -1262,54 +1269,103 @@ internal sealed class OverlayWindow : Window
         _config.Save();
     }
 
-    private void AttachStandardLineDragging(StandardLineVisual visual)
+    private void OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs eventArgs)
     {
-        visual.Container.PreviewMouseLeftButtonDown += (_, eventArgs) =>
+        if (IsPerformanceMode() || _config.PositionLocked ||
+            eventArgs.ChangedButton != MouseButton.Left) return;
+        var visual = FindStandardLineAt(eventArgs.GetPosition(this));
+        if (visual is null) return;
+        _draggingStandardLine = visual;
+        visual.IsDragging = true;
+        visual.DragStart = eventArgs.GetPosition(_standardLyricsCanvas);
+        visual.OriginalLeft = Canvas.GetLeft(visual.Container);
+        visual.OriginalTop = Canvas.GetTop(visual.Container);
+        if (!double.IsFinite(visual.OriginalLeft)) visual.OriginalLeft = 0;
+        if (!double.IsFinite(visual.OriginalTop)) visual.OriginalTop = 0;
+        CaptureMouse();
+        eventArgs.Handled = true;
+    }
+
+    private void OnPreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs eventArgs)
+    {
+        var visual = _draggingStandardLine;
+        if (visual is null || eventArgs.LeftButton != MouseButtonState.Pressed) return;
+        var point = eventArgs.GetPosition(_standardLyricsCanvas);
+        var width = Math.Max(1, visual.Container.ActualWidth);
+        var height = Math.Max(1, visual.Container.ActualHeight);
+        var padding = ScaledLayoutPixels(16);
+        var left = Math.Clamp(
+            visual.OriginalLeft + point.X - visual.DragStart.X,
+            padding,
+            Math.Max(padding, ActualWidth - width - padding));
+        var top = Math.Clamp(
+            visual.OriginalTop + point.Y - visual.DragStart.Y,
+            padding,
+            Math.Max(padding, ActualHeight - height - padding));
+        Canvas.SetLeft(visual.Container, left);
+        Canvas.SetTop(visual.Container, top);
+        eventArgs.Handled = true;
+    }
+
+    private void OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (_draggingStandardLine is null) return;
+        FinishStandardLineDrag(savePosition: true);
+        eventArgs.Handled = true;
+    }
+
+    private void OnLostMouseCapture(object sender, System.Windows.Input.MouseEventArgs eventArgs)
+    {
+        if (_draggingStandardLine is not null)
+            FinishStandardLineDrag(savePosition: true, releaseCapture: false);
+    }
+
+    private void FinishStandardLineDrag(bool savePosition, bool releaseCapture = true)
+    {
+        var visual = _draggingStandardLine;
+        if (visual is null) return;
+        if (savePosition) SaveStandardSlotPosition(visual);
+        visual.IsDragging = false;
+        _draggingStandardLine = null;
+        if (releaseCapture && IsMouseCaptured) ReleaseMouseCapture();
+    }
+
+    private StandardLineVisual? FindStandardLineAt(Point windowPoint)
+    {
+        for (var i = _standardLines.Count - 1; i >= 0; i--)
         {
-            if (IsPerformanceMode() || _config.PositionLocked ||
-                eventArgs.ChangedButton != MouseButton.Left) return;
-            visual.IsDragging = true;
-            visual.DragStart = eventArgs.GetPosition(_standardLyricsCanvas);
-            visual.OriginalLeft = Canvas.GetLeft(visual.Container);
-            visual.OriginalTop = Canvas.GetTop(visual.Container);
-            if (!double.IsFinite(visual.OriginalLeft)) visual.OriginalLeft = 0;
-            if (!double.IsFinite(visual.OriginalTop)) visual.OriginalTop = 0;
-            visual.Container.CaptureMouse();
-            eventArgs.Handled = true;
-        };
-        visual.Container.PreviewMouseMove += (_, eventArgs) =>
+            var line = _standardLines[i];
+            var bounds = GetStandardLineHitBounds(line);
+            if (bounds?.Contains(windowPoint) == true) return line;
+        }
+        return null;
+    }
+
+    private Rect? GetStandardLineHitBounds(StandardLineVisual line)
+    {
+        if (!line.Container.IsVisible || line.Container.Opacity <= 0.02 ||
+            line.Container.ActualWidth <= 0 || line.Container.ActualHeight <= 0) return null;
+        try
         {
-            if (!visual.IsDragging || eventArgs.LeftButton != MouseButtonState.Pressed) return;
-            var point = eventArgs.GetPosition(_standardLyricsCanvas);
-            var width = Math.Max(1, visual.Container.ActualWidth);
-            var height = Math.Max(1, visual.Container.ActualHeight);
-            var padding = ScaledLayoutPixels(16);
-            var left = Math.Clamp(
-                visual.OriginalLeft + point.X - visual.DragStart.X,
-                padding,
-                Math.Max(padding, ActualWidth - width - padding));
-            var top = Math.Clamp(
-                visual.OriginalTop + point.Y - visual.DragStart.Y,
-                padding,
-                Math.Max(padding, ActualHeight - height - padding));
-            Canvas.SetLeft(visual.Container, left);
-            Canvas.SetTop(visual.Container, top);
-            eventArgs.Handled = true;
-        };
-        visual.Container.PreviewMouseLeftButtonUp += (_, eventArgs) =>
+            var origin = line.Container.TranslatePoint(new Point(0, 0), this);
+            var bounds = new Rect(origin, new Size(
+                line.Container.ActualWidth,
+                line.Container.ActualHeight));
+            foreach (var glyph in line.Glyphs)
+            {
+                if (glyph.Text.ActualWidth <= 0 || glyph.Text.ActualHeight <= 0) continue;
+                var glyphBounds = glyph.Text.TransformToAncestor(this).TransformBounds(
+                    new Rect(new Point(0, 0), glyph.Text.RenderSize));
+                bounds.Union(glyphBounds);
+            }
+            var shadowPadding = Math.Min(Math.Abs(ScaledMotionPixels(12)), 120);
+            bounds.Inflate(shadowPadding, shadowPadding);
+            return bounds;
+        }
+        catch (InvalidOperationException)
         {
-            if (!visual.IsDragging) return;
-            SaveStandardSlotPosition(visual);
-            visual.IsDragging = false;
-            visual.Container.ReleaseMouseCapture();
-            eventArgs.Handled = true;
-        };
-        visual.Container.LostMouseCapture += (_, _) =>
-        {
-            if (!visual.IsDragging) return;
-            SaveStandardSlotPosition(visual);
-            visual.IsDragging = false;
-        };
+            return null;
+        }
     }
 
     private void OnSourceInitialized(object? sender, EventArgs eventArgs)
@@ -1344,16 +1400,8 @@ internal sealed class OverlayWindow : Window
             return IntPtr.Zero;
         }
 
-        foreach (var line in _standardLines)
+        if (FindStandardLineAt(windowPoint) is not null)
         {
-            if (!line.Container.IsVisible || line.Container.Opacity <= 0.02 ||
-                line.Container.ActualWidth <= 0 || line.Container.ActualHeight <= 0) continue;
-            var origin = line.Container.TranslatePoint(new Point(0, 0), this);
-            var bounds = new Rect(origin, new Size(
-                line.Container.ActualWidth,
-                line.Container.ActualHeight));
-            bounds.Inflate(ScaledLayoutPixels(8), ScaledLayoutPixels(6));
-            if (!bounds.Contains(windowPoint)) continue;
             handled = true;
             return new IntPtr(HtClient);
         }
@@ -1498,7 +1546,7 @@ internal sealed class OverlayWindow : Window
         else
             style &= ~(WsExTransparent | WsExNoactivate);
         SetWindowLongPtr(hwnd, GwlExstyle, new IntPtr(style));
-        Cursor = null;
+        Cursor = clickThrough ? null : Cursors.SizeAll;
         foreach (var line in _standardLines)
             line.Container.Cursor = clickThrough ? null : Cursors.SizeAll;
     }
