@@ -22,10 +22,10 @@ internal static class KeywordSelector
         "因为", "所以", "如果", "但是", "然后", "什么", "怎么", "没有", "不是", "可以", "一切"
     };
 
-    private static readonly HashSet<string> JapaneseStopWords = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> JapaneseKatakanaStopWords = new(StringComparer.Ordinal)
     {
-        "これ", "それ", "あれ", "ここ", "そこ", "そして", "だから", "けれど", "だけど", "する",
-        "いる", "ある", "なる", "ない", "です", "ます", "から", "まで", "より", "こと", "もの"
+        "コレ", "ソレ", "アレ", "ココ", "ソコ", "ダカラ", "ケレド", "ダケド", "スル",
+        "イル", "アル", "ナル", "ナイ", "デス", "マス", "カラ", "マデ", "ヨリ", "コト", "モノ"
     };
 
     private static readonly HashSet<string> MeaningfulSingleHan = new(StringComparer.Ordinal)
@@ -208,7 +208,7 @@ internal static class KeywordSelector
         var cursor = 0;
         while (cursor < value.Length)
         {
-            var kind = IsHan(value[cursor]) ? 1 : IsHiragana(value[cursor]) ? 2 : 0;
+            var kind = IsHan(value[cursor]) ? 1 : IsKatakanaRunCharacter(value[cursor]) ? 2 : 0;
             if (kind == 0)
             {
                 cursor++;
@@ -216,7 +216,7 @@ internal static class KeywordSelector
             }
             var start = cursor;
             while (cursor < value.Length &&
-                   (kind == 1 ? IsHan(value[cursor]) : IsHiragana(value[cursor]))) cursor++;
+                   (kind == 1 ? IsHan(value[cursor]) : IsKatakanaRunCharacter(value[cursor]))) cursor++;
             var run = value[start..cursor];
             if (kind == 1)
             {
@@ -224,7 +224,7 @@ internal static class KeywordSelector
                     result.Add(NewCandidate(lineIndex, tokenStart + start, run,
                         1.5 + Math.Min(run.Length, 4) * 0.3));
             }
-            else if (run.Length is >= 2 and <= 8 && !JapaneseStopWords.Contains(run))
+            else if (run.Length is >= 2 and <= 12 && !JapaneseKatakanaStopWords.Contains(run))
             {
                 result.Add(NewCandidate(lineIndex, tokenStart + start, run,
                     1.1 + Math.Min(run.Length, 6) * 0.16));
@@ -321,7 +321,13 @@ internal static class KeywordSelector
             >= '\uF900' and <= '\uFAFF' or '\u3005';
 
     private static bool IsHiragana(char value) => value is >= '\u3041' and <= '\u3096';
-    private static bool IsKatakana(char value) => value is >= '\u30A1' and <= '\u30FA';
+
+    private static bool IsKatakana(char value) =>
+        value is >= '\u30A1' and <= '\u30FA' or >= '\u30FD' and <= '\u30FF' or
+            >= '\u31F0' and <= '\u31FF' or >= '\uFF66' and <= '\uFF9D';
+
+    private static bool IsKatakanaRunCharacter(char value) =>
+        IsKatakana(value) || value is '\u30FC' or '\uFF70';
 
     private enum LyricLanguage
     {

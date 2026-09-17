@@ -133,15 +133,15 @@ internal static class Program
 
         var japaneseLyrics = new[]
         {
-            "深い夜のなかでひかりを探して",
-            "壊れた世界にこころを残した",
-            "遠い夢から静かな声が聞こえる"
+            "ミッドナイトのノイズをこえて",
+            "ココロのシグナルがひびく",
+            "エンドレスなリズムをきざむ"
         };
         var japaneseKeywords = KeywordSelector.Select(japaneseLyrics, "self-test-japanese")
             .SelectMany(pair => pair.Value)
             .ToArray();
         if (japaneseKeywords.Length != 2 || japaneseKeywords.Any(span =>
-                !(span.Text.All(IsHanForSelfTest) || span.Text.All(IsHiraganaForSelfTest))))
+                !(span.Text.All(IsHanForSelfTest) || span.Text.All(IsKatakanaForSelfTest))))
         {
             Environment.ExitCode = 8;
         }
@@ -168,7 +168,9 @@ internal static class Program
         value is >= '\u3400' and <= '\u4DBF' or >= '\u4E00' and <= '\u9FFF' or
             >= '\uF900' and <= '\uFAFF' or '\u3005';
 
-    private static bool IsHiraganaForSelfTest(char value) => value is >= '\u3041' and <= '\u3096';
+    private static bool IsKatakanaForSelfTest(char value) =>
+        value is >= '\u30A1' and <= '\u30FA' or >= '\u30FD' and <= '\u30FF' or
+            >= '\u31F0' and <= '\u31FF' or >= '\uFF66' and <= '\uFF9D' or '\u30FC' or '\uFF70';
 
     private static bool IsEnglishWordCharacter(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '\'' or '-';
