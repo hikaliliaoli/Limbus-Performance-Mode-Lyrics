@@ -418,18 +418,15 @@ internal sealed class OverlayWindow : Window
         var estimatedHeight = Math.Min(
             Math.Max(40, Height - layoutPadding * 2),
             ScaledCurrentFontSize * 1.9 + ScaledLayoutPixels(16));
-        var x = Math.Max(layoutPadding, (Width - estimatedWidth) / 2);
-        var slot = index % VisibleLyricsLimit;
-        var availableY = Math.Max(0, Height - estimatedHeight - layoutPadding * 2);
-        var y = VisibleLyricsLimit == 1
-            ? layoutPadding + availableY / 2
-            : layoutPadding + availableY * slot / (VisibleLyricsLimit - 1.0);
-        Canvas.SetLeft(container, x);
-        Canvas.SetTop(container, y);
-
         var visual = new StandardLineVisual(
-            index, container, glyphs, _activeLineStart, _activeLineEnd);
+            index, container, glyphs, _activeLineStart, _activeLineEnd,
+            estimatedWidth, estimatedHeight);
         AttachStandardLineDragging(visual);
+        PositionStandardLine(visual, StandardSlotForLine(index, VisibleLyricsLimit));
+        container.SizeChanged += (_, _) =>
+        {
+            if (!visual.IsDragging) PositionStandardLine(visual, visual.SlotIndex);
+        };
         _standardLines.Add(visual);
         _standardLyricsCanvas.Children.Add(container);
         _previous.Text = string.Empty;
@@ -1119,6 +1116,9 @@ internal sealed class OverlayWindow : Window
 
     private int VisibleLyricsLimit => Math.Clamp(_config.MaxVisibleLyrics, 1, 10);
 
+    internal static int StandardSlotForLine(int lineIndex, int visibleLyricsLimit) =>
+        Math.Max(0, lineIndex) % Math.Clamp(visibleLyricsLimit, 1, 10);
+
     private double ScaledMotionPixels(double value)
     {
         var screenLimit = Math.Max(SystemParameters.PrimaryScreenWidth, SystemParameters.PrimaryScreenHeight) * 2;
@@ -1201,6 +1201,67 @@ internal sealed class OverlayWindow : Window
         };
     }
 
+    private void PositionStandardLine(StandardLineVisual visual, int slotIndex)
+    {
+        slotIndex = Math.Clamp(slotIndex, 0, VisibleLyricsLimit - 1);
+        visual.SlotIndex = slotIndex;
+        var position = GetStandardSlotPosition(slotIndex);
+        var padding = ScaledLayoutPixels(16);
+        var width = visual.Container.ActualWidth > 1
+            ? visual.Container.ActualWidth
+            : visual.EstimatedWidth;
+        var height = visual.Container.ActualHeight > 1
+            ? visual.Container.ActualHeight
+            : visual.EstimatedHeight;
+        var availableWidth = Math.Max(0, ActualWidth - width - padding * 2);
+        var availableHeight = Math.Max(0, ActualHeight - height - padding * 2);
+        Canvas.SetLeft(visual.Container, padding + availableWidth * position.X);
+        Canvas.SetTop(visual.Container, padding + availableHeight * position.Y);
+    }
+
+    private LyricSlotPosition GetStandardSlotPosition(int slotIndex)
+    {
+        if (slotIndex < _config.StandardLyricPositions.Count)
+        {
+            var saved = _config.StandardLyricPositions[slotIndex];
+            if (saved.X >= 0 && saved.Y >= 0 &&
+                double.IsFinite(saved.X) && double.IsFinite(saved.Y))
+            {
+                return new LyricSlotPosition
+                {
+                    X = Math.Clamp(saved.X, 0, 1),
+                    Y = Math.Clamp(saved.Y, 0, 1)
+                };
+            }
+        }
+
+        var defaultY = VisibleLyricsLimit == 1
+            ? 0.68
+            : 0.18 + 0.64 * slotIndex / (VisibleLyricsLimit - 1.0);
+        return new LyricSlotPosition { X = 0.5, Y = defaultY };
+    }
+
+    private void SaveStandardSlotPosition(StandardLineVisual visual)
+    {
+        var padding = ScaledLayoutPixels(16);
+        var width = Math.Max(1, visual.Container.ActualWidth);
+        var height = Math.Max(1, visual.Container.ActualHeight);
+        var availableWidth = Math.Max(1, ActualWidth - width - padding * 2);
+        var availableHeight = Math.Max(1, ActualHeight - height - padding * 2);
+        var left = Canvas.GetLeft(visual.Container);
+        var top = Canvas.GetTop(visual.Container);
+        var normalizedX = Math.Clamp((left - padding) / availableWidth, 0, 1);
+        var normalizedY = Math.Clamp((top - padding) / availableHeight, 0, 1);
+        while (_config.StandardLyricPositions.Count <= visual.SlotIndex)
+            _config.StandardLyricPositions.Add(new LyricSlotPosition());
+        _config.StandardLyricPositions[visual.SlotIndex] = new LyricSlotPosition
+        {
+            X = normalizedX,
+            Y = normalizedY
+        };
+        _config.Save();
+    }
+
     private void AttachStandardLineDragging(StandardLineVisual visual)
     {
         visual.Container.PreviewMouseLeftButtonDown += (_, eventArgs) =>
@@ -1222,14 +1283,15 @@ internal sealed class OverlayWindow : Window
             var point = eventArgs.GetPosition(_standardLyricsCanvas);
             var width = Math.Max(1, visual.Container.ActualWidth);
             var height = Math.Max(1, visual.Container.ActualHeight);
+            var padding = ScaledLayoutPixels(16);
             var left = Math.Clamp(
                 visual.OriginalLeft + point.X - visual.DragStart.X,
-                0,
-                Math.Max(0, ActualWidth - width));
+                padding,
+                Math.Max(padding, ActualWidth - width - padding));
             var top = Math.Clamp(
                 visual.OriginalTop + point.Y - visual.DragStart.Y,
-                0,
-                Math.Max(0, ActualHeight - height));
+                padding,
+                Math.Max(padding, ActualHeight - height - padding));
             Canvas.SetLeft(visual.Container, left);
             Canvas.SetTop(visual.Container, top);
             eventArgs.Handled = true;
@@ -1237,11 +1299,17 @@ internal sealed class OverlayWindow : Window
         visual.Container.PreviewMouseLeftButtonUp += (_, eventArgs) =>
         {
             if (!visual.IsDragging) return;
+            SaveStandardSlotPosition(visual);
             visual.IsDragging = false;
             visual.Container.ReleaseMouseCapture();
             eventArgs.Handled = true;
         };
-        visual.Container.LostMouseCapture += (_, _) => visual.IsDragging = false;
+        visual.Container.LostMouseCapture += (_, _) =>
+        {
+            if (!visual.IsDragging) return;
+            SaveStandardSlotPosition(visual);
+            visual.IsDragging = false;
+        };
     }
 
     private void OnSourceInitialized(object? sender, EventArgs eventArgs)
@@ -1479,13 +1547,18 @@ internal sealed class OverlayWindow : Window
         Grid container,
         List<AnimatedGlyph> glyphs,
         TimeSpan start,
-        TimeSpan end)
+        TimeSpan end,
+        double estimatedWidth,
+        double estimatedHeight)
     {
         public int LineIndex { get; } = lineIndex;
         public Grid Container { get; } = container;
         public List<AnimatedGlyph> Glyphs { get; } = glyphs;
         public TimeSpan Start { get; } = start;
         public TimeSpan End { get; } = end;
+        public double EstimatedWidth { get; } = estimatedWidth;
+        public double EstimatedHeight { get; } = estimatedHeight;
+        public int SlotIndex { get; set; }
         public bool IsDragging { get; set; }
         public Point DragStart { get; set; }
         public double OriginalLeft { get; set; }

@@ -74,7 +74,7 @@ internal static class Program
         {
             window.Loaded += async (_, _) =>
             {
-                await Task.Delay(5500);
+                await Task.Delay(9500);
                 window.Close();
             };
         }
@@ -106,6 +106,14 @@ internal static class Program
             duration != TimeSpan.FromSeconds(238))
         {
             Environment.ExitCode = 4;
+        }
+
+        if (OverlayWindow.StandardSlotForLine(0, 2) != 0 ||
+            OverlayWindow.StandardSlotForLine(1, 2) != 1 ||
+            OverlayWindow.StandardSlotForLine(2, 2) != 0 ||
+            OverlayWindow.StandardSlotForLine(3, 2) != 1)
+        {
+            Environment.ExitCode = 6;
         }
     }
 

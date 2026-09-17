@@ -6,7 +6,7 @@ namespace NeteaseLyricsOverlay;
 
 internal sealed class OverlayConfig
 {
-    public int ConfigVersion { get; set; } = 6;
+    public int ConfigVersion { get; set; } = 7;
     public double Left { get; set; } = -1;
     public double Top { get; set; } = -1;
     public double Width { get; set; } = 1200;
@@ -21,6 +21,7 @@ internal sealed class OverlayConfig
     public double LyricOpacity { get; set; } = 1.0;
     public double FontScale { get; set; } = 1.0;
     public int MaxVisibleLyrics { get; set; } = 2;
+    public List<LyricSlotPosition> StandardLyricPositions { get; set; } = [];
     public bool PositionLocked { get; set; } = true;
     public bool ShowSongTitle { get; set; } = false;
     public bool ShowTranslation { get; set; } = true;
@@ -76,8 +77,15 @@ internal sealed class OverlayConfig
             if (savedVersion < 4) config.ApplyVersion4Defaults();
             if (savedVersion < 5) config.ApplyVersion5Defaults();
             if (savedVersion < 6) config.ApplyVersion6Defaults();
+            if (savedVersion < 7) config.ApplyVersion7Defaults();
             config.MaxVisibleLyrics = Math.Clamp(config.MaxVisibleLyrics, 1, 10);
-            if (savedVersion < 6) config.Save();
+            config.StandardLyricPositions ??= [];
+            foreach (var position in config.StandardLyricPositions)
+            {
+                position.X = NormalizePosition(position.X);
+                position.Y = NormalizePosition(position.Y);
+            }
+            if (savedVersion < 7) config.Save();
             return config;
         }
         catch
@@ -146,9 +154,24 @@ internal sealed class OverlayConfig
         MaxVisibleLyrics = 2;
     }
 
+    private void ApplyVersion7Defaults()
+    {
+        ConfigVersion = 7;
+        StandardLyricPositions = [];
+    }
+
+    private static double NormalizePosition(double value) =>
+        double.IsFinite(value) && value >= 0 ? Math.Clamp(value, 0, 1) : -1;
+
     private static JsonSerializerOptions JsonOptions() => new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true
     };
+}
+
+internal sealed class LyricSlotPosition
+{
+    public double X { get; set; } = -1;
+    public double Y { get; set; } = -1;
 }

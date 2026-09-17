@@ -1,5 +1,5 @@
 {
-  "ConfigVersion": 6,
+  "ConfigVersion": 7,
   "Left": -1,
   "Top": -1,
   "Width": 1200,
@@ -14,6 +14,7 @@
   "LyricOpacity": 1.0,
   "FontScale": 1.0,
   "MaxVisibleLyrics": 2,
+  "StandardLyricPositions": [],
   "PositionLocked": true,
   "ShowSongTitle": false,
   "ShowTranslation": true,
