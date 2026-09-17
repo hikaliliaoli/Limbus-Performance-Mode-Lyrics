@@ -30,9 +30,8 @@ internal sealed class OverlayWindow : Window
     private readonly TextBlock _previous = NewTextBlock();
     private readonly TextBlock _next = NewTextBlock();
     private readonly TextBlock _status = NewTextBlock();
-    private readonly StackPanel _standardGlyphPanel = new() { Orientation = Orientation.Horizontal };
-    private readonly Viewbox _standardGlyphViewbox = NewViewbox();
-    private readonly List<AnimatedGlyph> _standardGlyphs = [];
+    private readonly Canvas _standardLyricsCanvas = new() { IsHitTestVisible = true };
+    private readonly List<StandardLineVisual> _standardLines = [];
     private readonly List<PerformanceLineVisual> _performanceLines = [];
 
     private readonly MediaSessionReader _media = new();
@@ -45,6 +44,8 @@ internal sealed class OverlayWindow : Window
     private Forms.ToolStripMenuItem? _standardModeItem;
     private Forms.ToolStripMenuItem? _performanceModeItem;
     private Forms.ToolStripMenuItem? _positionLockItem;
+    private Forms.ToolStripMenuItem? _visibleLyricsMenu;
+    private readonly List<Forms.ToolStripMenuItem> _visibleLyricsItems = [];
     private Forms.TrackBar? _opacitySlider;
     private Forms.NumericUpDown? _opacityNumber;
     private bool _updatingOpacitySlider;
@@ -95,14 +96,13 @@ internal sealed class OverlayWindow : Window
         Focusable = false;
         SnapsToDevicePixels = true;
 
-        _standardGlyphViewbox.Child = _standardGlyphPanel;
         var currentHost = new Grid { HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch };
-        currentHost.Children.Add(_standardGlyphViewbox);
         currentHost.Children.Add(_status);
         _standardPanel.Children.Add(_title);
         _standardPanel.Children.Add(_previous);
         _standardPanel.Children.Add(currentHost);
         _standardPanel.Children.Add(_next);
+        _root.Children.Add(_standardLyricsCanvas);
         _root.Children.Add(_standardPanel);
         _root.Children.Add(_performanceCanvas);
         _root.Background = System.Windows.Media.Brushes.Transparent;
@@ -381,30 +381,93 @@ internal sealed class OverlayWindow : Window
     {
         _performanceCanvas.Visibility = Visibility.Collapsed;
         _standardPanel.Visibility = Visibility.Visible;
+        _standardLyricsCanvas.Visibility = Visibility.Visible;
         _status.Visibility = Visibility.Collapsed;
-        _standardGlyphViewbox.Visibility = Visibility.Visible;
-        _standardGlyphs.Clear();
-        _standardGlyphPanel.Children.Clear();
-        CreateGlyphs(_standardGlyphPanel, _standardGlyphs, GetDisplayText(_lyrics[index]), index);
-        _previous.Text = _config.ShowPreviousLine && index > 0 ? GetDisplayText(_lyrics[index - 1]) : string.Empty;
-        _next.Text = _config.ShowNextLine && index + 1 < _lyrics.Count ? GetDisplayText(_lyrics[index + 1]) : string.Empty;
+        while (_standardLines.Count >= VisibleLyricsLimit)
+        {
+            _standardLyricsCanvas.Children.Remove(_standardLines[0].Container);
+            _standardLines.RemoveAt(0);
+        }
+
+        var text = GetDisplayText(_lyrics[index]);
+        var glyphPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        var glyphs = new List<AnimatedGlyph>();
+        CreateGlyphs(glyphPanel, glyphs, text, index);
+        var viewbox = NewViewbox();
+        var layoutPadding = ScaledLayoutPixels(16);
+        viewbox.MaxWidth = Math.Max(100, Width - layoutPadding * 2);
+        viewbox.MaxHeight = Math.Min(
+            Math.Max(40, Height - layoutPadding * 2),
+            ScaledCurrentFontSize * 1.9 + ScaledLayoutPixels(16));
+        viewbox.Child = glyphPanel;
+        var container = new Grid
+        {
+            Background = System.Windows.Media.Brushes.Transparent,
+            Cursor = _config.PositionLocked ? null : Cursors.SizeAll
+        };
+        container.Children.Add(viewbox);
+
+        var estimatedWidth = Math.Min(
+            Math.Max(100, Width - layoutPadding * 2),
+            Math.Max(ScaledLayoutPixels(180), text.Length * ScaledCurrentFontSize * 0.72));
+        var estimatedHeight = Math.Min(
+            Math.Max(40, Height - layoutPadding * 2),
+            ScaledCurrentFontSize * 1.9 + ScaledLayoutPixels(16));
+        var x = Math.Max(layoutPadding, (Width - estimatedWidth) / 2);
+        var slot = index % VisibleLyricsLimit;
+        var availableY = Math.Max(0, Height - estimatedHeight - layoutPadding * 2);
+        var y = VisibleLyricsLimit == 1
+            ? layoutPadding + availableY / 2
+            : layoutPadding + availableY * slot / (VisibleLyricsLimit - 1.0);
+        Canvas.SetLeft(container, x);
+        Canvas.SetTop(container, y);
+
+        var visual = new StandardLineVisual(
+            index, container, glyphs, _activeLineStart, _activeLineEnd);
+        AttachStandardLineDragging(visual);
+        _standardLines.Add(visual);
+        _standardLyricsCanvas.Children.Add(container);
+        _previous.Text = string.Empty;
+        _next.Text = string.Empty;
         AnimateStandard(CurrentPlaybackPosition());
     }
 
     private void AnimateStandard(TimeSpan position)
     {
-        if (_standardGlyphs.Count == 0 || _activeLineIndex < 0) return;
-        var timing = CalculateTiming(position, _activeLineStart, _activeLineEnd, _standardGlyphs.Count);
-        AnimateGlyphs(_standardGlyphs, timing, useIndividualDrift: true);
-        _previous.Opacity = timing.GroupOpacity * 0.55;
-        _next.Opacity = timing.GroupOpacity * 0.55;
+        if (_standardLines.Count == 0 || _activeLineIndex < 0) return;
+        var current = _standardLines[^1];
+        var currentDuration = Math.Max(0.65, (current.End - current.Start).TotalSeconds);
+        var currentProgress = Math.Clamp((position - current.Start).TotalSeconds / currentDuration, 0, 1);
+        var fadingLine = _standardLines.Count >= VisibleLyricsLimit && _standardLines.Count > 1
+            ? _standardLines[0]
+            : null;
+
+        foreach (var line in _standardLines)
+        {
+            var timing = CalculatePerformanceTiming(position, line.Start, line.End, line.Glyphs.Count);
+            AnimateGlyphs(line.Glyphs, timing, useIndividualDrift: true);
+            var opacity = 1.0;
+            if (ReferenceEquals(line, fadingLine))
+            {
+                var fadeStart = Math.Clamp(_config.PerformancePreviousFadeStart, 0.1, 0.95);
+                opacity = currentProgress <= fadeStart
+                    ? 1
+                    : 1 - Math.Clamp((currentProgress - fadeStart) / (1 - fadeStart), 0, 1);
+            }
+            else if (ReferenceEquals(line, current) &&
+                     line.LineIndex == _lyrics.Count - 1 && position > line.End)
+            {
+                opacity = 1 - Math.Clamp((position - line.End).TotalSeconds / 0.9, 0, 1);
+            }
+            line.Container.Opacity = opacity;
+        }
     }
 
     private void BeginPerformanceLine(int index)
     {
         _standardPanel.Visibility = Visibility.Collapsed;
         _performanceCanvas.Visibility = Visibility.Visible;
-        while (_performanceLines.Count >= 2)
+        while (_performanceLines.Count >= VisibleLyricsLimit)
         {
             _performanceCanvas.Children.Remove(_performanceLines[0].Container);
             _performanceLines.RemoveAt(0);
@@ -466,13 +529,16 @@ internal sealed class OverlayWindow : Window
         var currentDuration = Math.Max(0.65, (current.End - current.Start).TotalSeconds);
         var currentProgress = Math.Clamp((position - current.Start).TotalSeconds / currentDuration, 0, 1);
         var motionTime = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+        var fadingLine = _performanceLines.Count >= VisibleLyricsLimit && _performanceLines.Count > 1
+            ? _performanceLines[0]
+            : null;
 
         for (var i = 0; i < _performanceLines.Count; i++)
         {
             var line = _performanceLines[i];
             var isCurrent = ReferenceEquals(line, current);
             var opacity = 1.0;
-            if (!isCurrent)
+            if (ReferenceEquals(line, fadingLine))
             {
                 var fadeStart = Math.Clamp(_config.PerformancePreviousFadeStart, 0.1, 0.95);
                 opacity = currentProgress <= fadeStart
@@ -626,8 +692,8 @@ internal sealed class OverlayWindow : Window
         if (!preserveLineIndex) _activeLineIndex = int.MinValue;
         ClearAllLyrics();
         _standardPanel.Visibility = Visibility.Visible;
+        _standardLyricsCanvas.Visibility = Visibility.Collapsed;
         _performanceCanvas.Visibility = Visibility.Collapsed;
-        _standardGlyphViewbox.Visibility = Visibility.Collapsed;
         _status.Visibility = Visibility.Visible;
         _status.Text = text;
         _status.Opacity = 1;
@@ -639,8 +705,8 @@ internal sealed class OverlayWindow : Window
 
     private void ClearAllLyrics()
     {
-        _standardGlyphs.Clear();
-        _standardGlyphPanel.Children.Clear();
+        _standardLines.Clear();
+        _standardLyricsCanvas.Children.Clear();
         _previous.Text = string.Empty;
         _next.Text = string.Empty;
         _performanceLines.Clear();
@@ -693,9 +759,11 @@ internal sealed class OverlayWindow : Window
             var contextLineCount = (_config.ShowSongTitle ? 1 : 0) +
                                    (_config.ShowPreviousLine ? 1 : 0) +
                                    (_config.ShowNextLine ? 1 : 0);
+            var lyricStackHeight = VisibleLyricsLimit *
+                                   (ScaledCurrentFontSize * 1.55 + ScaledLayoutPixels(8));
             var requestedHeight = Math.Max(
                 _config.Height * EffectiveFontScale,
-                ScaledCurrentFontSize * 1.65 +
+                lyricStackHeight +
                 contextLineCount * ScaledContextFontSize * 1.4 + ScaledLayoutPixels(32));
             Width = Math.Min(SystemParameters.PrimaryScreenWidth, Math.Max(300, requestedWidth));
             Height = Math.Min(SystemParameters.PrimaryScreenHeight, Math.Max(100, requestedHeight));
@@ -708,8 +776,6 @@ internal sealed class OverlayWindow : Window
 
             var reservedContextHeight = contextLineCount * ScaledContextFontSize * 1.4;
             var layoutPadding = ScaledLayoutPixels(24);
-            _standardGlyphViewbox.MaxWidth = Math.Max(100, Width - layoutPadding);
-            _standardGlyphViewbox.MaxHeight = Math.Max(40, Height - reservedContextHeight - layoutPadding);
             _status.MaxWidth = Math.Max(100, Width - layoutPadding);
             _status.MaxHeight = Math.Max(40, Height - reservedContextHeight - layoutPadding);
         }
@@ -748,6 +814,18 @@ internal sealed class OverlayWindow : Window
         modeMenu.DropDownItems.Add(_standardModeItem);
         modeMenu.DropDownItems.Add(_performanceModeItem);
         menu.Items.Add(modeMenu);
+
+        _visibleLyricsMenu = new Forms.ToolStripMenuItem("屏幕歌词数量");
+        for (var count = 1; count <= 10; count++)
+        {
+            var selectedCount = count;
+            var item = new Forms.ToolStripMenuItem(
+                $"最多 {selectedCount} 条", null,
+                (_, _) => Dispatcher.Invoke(() => SetVisibleLyricsLimit(selectedCount)));
+            _visibleLyricsItems.Add(item);
+            _visibleLyricsMenu.DropDownItems.Add(item);
+        }
+        menu.Items.Add(_visibleLyricsMenu);
 
         _positionLockItem = new Forms.ToolStripMenuItem(
             "锁定歌词位置", null, (_, _) => Dispatcher.Invoke(TogglePositionLock));
@@ -913,6 +991,10 @@ internal sealed class OverlayWindow : Window
             _translationLanguageItem.Checked = string.Equals(_config.LyricLanguage, "Translation", StringComparison.OrdinalIgnoreCase);
         if (_standardModeItem is not null) _standardModeItem.Checked = !IsPerformanceMode();
         if (_performanceModeItem is not null) _performanceModeItem.Checked = IsPerformanceMode();
+        if (_visibleLyricsMenu is not null)
+            _visibleLyricsMenu.Text = $"屏幕歌词数量（最多 {VisibleLyricsLimit} 条）";
+        for (var i = 0; i < _visibleLyricsItems.Count; i++)
+            _visibleLyricsItems[i].Checked = i + 1 == VisibleLyricsLimit;
         if (_positionLockItem is not null)
         {
             _positionLockItem.Checked = _config.PositionLocked;
@@ -947,6 +1029,19 @@ internal sealed class OverlayWindow : Window
         _config.Save();
         UpdateInteractionMode();
         RefreshMenuChecks();
+    }
+
+    private void SetVisibleLyricsLimit(int value)
+    {
+        value = Math.Clamp(value, 1, 10);
+        if (_config.MaxVisibleLyrics == value) return;
+        _config.MaxVisibleLyrics = value;
+        _config.Save();
+        ApplyWindowMode();
+        RefreshMenuChecks();
+        _activeLineIndex = int.MinValue;
+        ClearAllLyrics();
+        if (_lyrics.Count > 0 && _clockInitialized) EnsureActiveLine(CurrentPlaybackPosition());
     }
 
     private void SetLyricOpacity(int percentage)
@@ -1008,6 +1103,8 @@ internal sealed class OverlayWindow : Window
 
     private double EffectiveFontScale =>
         double.IsFinite(_config.FontScale) && _config.FontScale > 0 ? _config.FontScale : 1.0;
+
+    private int VisibleLyricsLimit => Math.Clamp(_config.MaxVisibleLyrics, 1, 10);
 
     private double ScaledMotionPixels(double value)
     {
@@ -1083,6 +1180,49 @@ internal sealed class OverlayWindow : Window
             Height = 36,
             Margin = new Forms.Padding(4, 0, 4, 3)
         };
+    }
+
+    private void AttachStandardLineDragging(StandardLineVisual visual)
+    {
+        visual.Container.PreviewMouseLeftButtonDown += (_, eventArgs) =>
+        {
+            if (IsPerformanceMode() || _config.PositionLocked ||
+                eventArgs.ChangedButton != MouseButton.Left) return;
+            visual.IsDragging = true;
+            visual.DragStart = eventArgs.GetPosition(_standardLyricsCanvas);
+            visual.OriginalLeft = Canvas.GetLeft(visual.Container);
+            visual.OriginalTop = Canvas.GetTop(visual.Container);
+            if (!double.IsFinite(visual.OriginalLeft)) visual.OriginalLeft = 0;
+            if (!double.IsFinite(visual.OriginalTop)) visual.OriginalTop = 0;
+            visual.Container.CaptureMouse();
+            eventArgs.Handled = true;
+        };
+        visual.Container.PreviewMouseMove += (_, eventArgs) =>
+        {
+            if (!visual.IsDragging || eventArgs.LeftButton != MouseButtonState.Pressed) return;
+            var point = eventArgs.GetPosition(_standardLyricsCanvas);
+            var width = Math.Max(1, visual.Container.ActualWidth);
+            var height = Math.Max(1, visual.Container.ActualHeight);
+            var left = Math.Clamp(
+                visual.OriginalLeft + point.X - visual.DragStart.X,
+                0,
+                Math.Max(0, ActualWidth - width));
+            var top = Math.Clamp(
+                visual.OriginalTop + point.Y - visual.DragStart.Y,
+                0,
+                Math.Max(0, ActualHeight - height));
+            Canvas.SetLeft(visual.Container, left);
+            Canvas.SetTop(visual.Container, top);
+            eventArgs.Handled = true;
+        };
+        visual.Container.PreviewMouseLeftButtonUp += (_, eventArgs) =>
+        {
+            if (!visual.IsDragging) return;
+            visual.IsDragging = false;
+            visual.Container.ReleaseMouseCapture();
+            eventArgs.Handled = true;
+        };
+        visual.Container.LostMouseCapture += (_, _) => visual.IsDragging = false;
     }
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1238,6 +1378,8 @@ internal sealed class OverlayWindow : Window
             style &= ~(WsExTransparent | WsExNoactivate);
         SetWindowLongPtr(hwnd, GwlExstyle, new IntPtr(style));
         Cursor = clickThrough ? null : Cursors.SizeAll;
+        foreach (var line in _standardLines)
+            line.Container.Cursor = clickThrough ? null : Cursors.SizeAll;
     }
 
     private void OnClosing(object? sender, CancelEventArgs e)
@@ -1276,6 +1418,24 @@ internal sealed class OverlayWindow : Window
         int Direction,
         double Frequency,
         double Phase);
+
+    private sealed class StandardLineVisual(
+        int lineIndex,
+        Grid container,
+        List<AnimatedGlyph> glyphs,
+        TimeSpan start,
+        TimeSpan end)
+    {
+        public int LineIndex { get; } = lineIndex;
+        public Grid Container { get; } = container;
+        public List<AnimatedGlyph> Glyphs { get; } = glyphs;
+        public TimeSpan Start { get; } = start;
+        public TimeSpan End { get; } = end;
+        public bool IsDragging { get; set; }
+        public Point DragStart { get; set; }
+        public double OriginalLeft { get; set; }
+        public double OriginalTop { get; set; }
+    }
 
     private sealed class PerformanceLineVisual(
         int lineIndex,

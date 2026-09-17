@@ -65,13 +65,16 @@ internal static class Program
             args.Handled = true;
         };
         var performanceDemo = args.Contains("--demo-performance", StringComparer.OrdinalIgnoreCase);
-        var startInDemo = performanceDemo || args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
-        var window = new OverlayWindow(startInDemo, performanceDemo ? "Performance" : null);
+        var standardDemo = args.Contains("--demo-standard", StringComparer.OrdinalIgnoreCase);
+        var startInDemo = performanceDemo || standardDemo ||
+                          args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
+        var startupMode = performanceDemo ? "Performance" : standardDemo ? "Standard" : null;
+        var window = new OverlayWindow(startInDemo, startupMode);
         if (shutdownTest)
         {
             window.Loaded += async (_, _) =>
             {
-                await Task.Delay(4000);
+                await Task.Delay(5500);
                 window.Close();
             };
         }

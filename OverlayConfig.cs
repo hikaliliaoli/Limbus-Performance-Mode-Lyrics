@@ -6,7 +6,7 @@ namespace NeteaseLyricsOverlay;
 
 internal sealed class OverlayConfig
 {
-    public int ConfigVersion { get; set; } = 5;
+    public int ConfigVersion { get; set; } = 6;
     public double Left { get; set; } = -1;
     public double Top { get; set; } = -1;
     public double Width { get; set; } = 1200;
@@ -20,6 +20,7 @@ internal sealed class OverlayConfig
     public string ShadowColor { get; set; } = "#F0000000";
     public double LyricOpacity { get; set; } = 1.0;
     public double FontScale { get; set; } = 1.0;
+    public int MaxVisibleLyrics { get; set; } = 2;
     public bool PositionLocked { get; set; } = true;
     public bool ShowSongTitle { get; set; } = false;
     public bool ShowTranslation { get; set; } = true;
@@ -74,7 +75,9 @@ internal sealed class OverlayConfig
             if (savedVersion < 3) config.ApplyVersion3Defaults();
             if (savedVersion < 4) config.ApplyVersion4Defaults();
             if (savedVersion < 5) config.ApplyVersion5Defaults();
-            if (savedVersion < 5) config.Save();
+            if (savedVersion < 6) config.ApplyVersion6Defaults();
+            config.MaxVisibleLyrics = Math.Clamp(config.MaxVisibleLyrics, 1, 10);
+            if (savedVersion < 6) config.Save();
             return config;
         }
         catch
@@ -135,6 +138,12 @@ internal sealed class OverlayConfig
     {
         ConfigVersion = 5;
         FontScale = 1.0;
+    }
+
+    private void ApplyVersion6Defaults()
+    {
+        ConfigVersion = 6;
+        MaxVisibleLyrics = 2;
     }
 
     private static JsonSerializerOptions JsonOptions() => new()

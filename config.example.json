@@ -1,5 +1,5 @@
 {
-  "ConfigVersion": 5,
+  "ConfigVersion": 6,
   "Left": -1,
   "Top": -1,
   "Width": 1200,
@@ -13,6 +13,7 @@
   "ShadowColor": "#F0000000",
   "LyricOpacity": 1.0,
   "FontScale": 1.0,
+  "MaxVisibleLyrics": 2,
   "PositionLocked": true,
   "ShowSongTitle": false,
   "ShowTranslation": true,
