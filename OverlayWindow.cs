@@ -682,14 +682,29 @@ internal sealed class OverlayWindow : Window
         }
         else
         {
-            Width = Math.Min(SystemParameters.PrimaryScreenWidth, Math.Max(300, _config.Width));
-            Height = Math.Min(SystemParameters.PrimaryScreenHeight, Math.Max(100, _config.Height));
+            var widthGrowth = Math.Sqrt(Math.Max(1, EffectiveFontScale));
+            var requestedWidth = Math.Max(_config.Width, _config.Width * widthGrowth);
+            var contextLineCount = (_config.ShowSongTitle ? 1 : 0) +
+                                   (_config.ShowPreviousLine ? 1 : 0) +
+                                   (_config.ShowNextLine ? 1 : 0);
+            var requestedHeight = Math.Max(
+                _config.Height,
+                ScaledCurrentFontSize * 1.65 +
+                contextLineCount * ScaledContextFontSize * 1.4 + 32);
+            Width = Math.Min(SystemParameters.PrimaryScreenWidth, Math.Max(300, requestedWidth));
+            Height = Math.Min(SystemParameters.PrimaryScreenHeight, Math.Max(100, requestedHeight));
             Top = _config.Top >= 0
                 ? Math.Clamp(_config.Top, 0, Math.Max(0, SystemParameters.PrimaryScreenHeight - Height))
                 : Math.Max(0, SystemParameters.PrimaryScreenHeight * 0.64 - Height / 2);
             Left = _config.Left >= 0
                 ? Math.Clamp(_config.Left, 0, Math.Max(0, SystemParameters.PrimaryScreenWidth - Width))
                 : Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
+
+            var reservedContextHeight = contextLineCount * ScaledContextFontSize * 1.4;
+            _standardGlyphViewbox.MaxWidth = Math.Max(100, Width - 24);
+            _standardGlyphViewbox.MaxHeight = Math.Max(40, Height - reservedContextHeight - 24);
+            _status.MaxWidth = Math.Max(100, Width - 24);
+            _status.MaxHeight = Math.Max(40, Height - reservedContextHeight - 24);
         }
     }
 
@@ -953,6 +968,7 @@ internal sealed class OverlayWindow : Window
         _updatingFontScaleSlider = false;
         _config.FontScale = percentage / 100.0;
         _config.Save();
+        ApplyWindowMode();
         ApplyConfiguredFontSizes();
         _activeLineIndex = int.MinValue;
         ClearAllLyrics();
