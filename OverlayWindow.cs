@@ -45,7 +45,9 @@ internal sealed class OverlayWindow : Window
     private Forms.ToolStripMenuItem? _standardModeItem;
     private Forms.ToolStripMenuItem? _performanceModeItem;
     private Forms.ToolStripMenuItem? _positionLockItem;
-    private readonly List<(Forms.ToolStripMenuItem Item, double Value)> _opacityItems = [];
+    private Forms.TrackBar? _opacitySlider;
+    private Forms.ToolStripMenuItem? _opacityValueItem;
+    private bool _updatingOpacitySlider;
 
     private DispatcherTimer _pollTimer = null!;
     private DispatcherTimer _animationTimer = null!;
@@ -640,7 +642,7 @@ internal sealed class OverlayWindow : Window
         _config = OverlayConfig.Load();
         _activeFont = ImportedFontManager.Resolve(_config);
         ApplyWindowMode();
-        Opacity = Math.Clamp(_config.LyricOpacity, 0.15, 1.0);
+        Opacity = Math.Clamp(_config.LyricOpacity, 0.0, 1.0);
         UpdateInteractionMode();
 
         var contextBrush = ParseBrush(_config.ContextColor, Colors.White);
@@ -734,13 +736,32 @@ internal sealed class OverlayWindow : Window
         appearanceMenu.DropDownItems.Add("恢复默认字体", null, (_, _) => ResetFont());
         appearanceMenu.DropDownItems.Add("选择歌词颜色…", null, (_, _) => ChooseLyricColor());
         var opacityMenu = new Forms.ToolStripMenuItem("歌词透明度");
-        foreach (var value in new[] { 1.0, 0.9, 0.75, 0.6, 0.4, 0.2 })
+        _opacitySlider = new Forms.TrackBar
         {
-            var item = new Forms.ToolStripMenuItem(
-                $"{value:P0}", null, (_, _) => Dispatcher.Invoke(() => SetLyricOpacity(value)));
-            _opacityItems.Add((item, value));
-            opacityMenu.DropDownItems.Add(item);
-        }
+            Minimum = 0,
+            Maximum = 100,
+            Value = 100,
+            TickFrequency = 10,
+            SmallChange = 1,
+            LargeChange = 10,
+            AutoSize = false,
+            Width = 220,
+            Height = 48
+        };
+        _opacitySlider.ValueChanged += (_, _) =>
+        {
+            if (!_updatingOpacitySlider)
+                Dispatcher.Invoke(() => SetLyricOpacity(_opacitySlider.Value));
+        };
+        opacityMenu.DropDownItems.Add(new Forms.ToolStripControlHost(_opacitySlider)
+        {
+            AutoSize = false,
+            Width = 230,
+            Height = 50,
+            Margin = new Forms.Padding(4, 2, 4, 2)
+        });
+        _opacityValueItem = new Forms.ToolStripMenuItem("当前：100%") { Enabled = false };
+        opacityMenu.DropDownItems.Add(_opacityValueItem);
         appearanceMenu.DropDownItems.Add(opacityMenu);
         menu.Items.Add(appearanceMenu);
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -831,8 +852,14 @@ internal sealed class OverlayWindow : Window
                 ? "锁定歌词位置（已锁定）"
                 : "锁定歌词位置（可拖动）";
         }
-        foreach (var (item, value) in _opacityItems)
-            item.Checked = Math.Abs(_config.LyricOpacity - value) < 0.01;
+        var opacityPercentage = (int)Math.Round(Math.Clamp(_config.LyricOpacity, 0.0, 1.0) * 100);
+        if (_opacitySlider is not null)
+        {
+            _updatingOpacitySlider = true;
+            _opacitySlider.Value = opacityPercentage;
+            _updatingOpacitySlider = false;
+        }
+        if (_opacityValueItem is not null) _opacityValueItem.Text = $"当前：{opacityPercentage}%";
     }
 
     private void TogglePositionLock()
@@ -844,12 +871,13 @@ internal sealed class OverlayWindow : Window
         RefreshMenuChecks();
     }
 
-    private void SetLyricOpacity(double value)
+    private void SetLyricOpacity(int percentage)
     {
-        _config.LyricOpacity = Math.Clamp(value, 0.15, 1.0);
+        percentage = Math.Clamp(percentage, 0, 100);
+        _config.LyricOpacity = percentage / 100.0;
         Opacity = _config.LyricOpacity;
         _config.Save();
-        RefreshMenuChecks();
+        if (_opacityValueItem is not null) _opacityValueItem.Text = $"当前：{percentage}%";
     }
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
