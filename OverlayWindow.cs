@@ -48,6 +48,9 @@ internal sealed class OverlayWindow : Window
     private Forms.TrackBar? _opacitySlider;
     private Forms.ToolStripMenuItem? _opacityValueItem;
     private bool _updatingOpacitySlider;
+    private Forms.TrackBar? _fontScaleSlider;
+    private Forms.ToolStripMenuItem? _fontScaleValueItem;
+    private bool _updatingFontScaleSlider;
 
     private DispatcherTimer _pollTimer = null!;
     private DispatcherTimer _animationTimer = null!;
@@ -413,14 +416,14 @@ internal sealed class OverlayWindow : Window
         CreateGlyphs(glyphPanel, glyphs, text, index);
         var viewbox = NewViewbox();
         viewbox.MaxWidth = Math.Max(300, SystemParameters.PrimaryScreenWidth * 0.72);
-        viewbox.MaxHeight = _config.CurrentFontSize * 1.8;
+        viewbox.MaxHeight = ScaledCurrentFontSize * 1.8;
         viewbox.Child = glyphPanel;
         var container = new Grid { Opacity = 1 };
         container.Children.Add(viewbox);
 
         var random = new Random(HashCode.Combine(_songKey, index, text));
         var estimatedWidth = Math.Min(SystemParameters.PrimaryScreenWidth * 0.72,
-            Math.Max(180, text.Length * _config.CurrentFontSize * 0.72));
+            Math.Max(180, text.Length * ScaledCurrentFontSize * 0.72));
         var maxX = Math.Max(30, SystemParameters.PrimaryScreenWidth - estimatedWidth - 40);
         var x = 30 + random.NextDouble() * Math.Max(1, maxX - 30);
         var minY = SystemParameters.PrimaryScreenHeight * 0.13;
@@ -568,7 +571,7 @@ internal sealed class OverlayWindow : Window
             {
                 Text = elements[i] == " " ? "\u00A0" : elements[i],
                 FontFamily = _activeFont,
-                FontSize = _config.CurrentFontSize,
+                FontSize = ScaledCurrentFontSize,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = ParseBrush(_config.CurrentColor, Colors.White),
                 Opacity = 0,
@@ -651,10 +654,7 @@ internal sealed class OverlayWindow : Window
             block.FontFamily = _activeFont;
             block.Effect = CreateShadow();
         }
-        _title.FontSize = Math.Max(10, _config.ContextFontSize - 2);
-        _previous.FontSize = _config.ContextFontSize;
-        _next.FontSize = _config.ContextFontSize;
-        _status.FontSize = _config.CurrentFontSize;
+        ApplyConfiguredFontSizes();
         _status.FontWeight = FontWeights.SemiBold;
         _title.Foreground = contextBrush;
         _previous.Foreground = contextBrush;
@@ -735,6 +735,34 @@ internal sealed class OverlayWindow : Window
         appearanceMenu.DropDownItems.Add("导入字体…", null, (_, _) => ImportFont());
         appearanceMenu.DropDownItems.Add("恢复默认字体", null, (_, _) => ResetFont());
         appearanceMenu.DropDownItems.Add("选择歌词颜色…", null, (_, _) => ChooseLyricColor());
+        var fontScaleMenu = new Forms.ToolStripMenuItem("整体字体大小");
+        _fontScaleSlider = new Forms.TrackBar
+        {
+            Minimum = 50,
+            Maximum = 200,
+            Value = 100,
+            TickFrequency = 25,
+            SmallChange = 1,
+            LargeChange = 10,
+            AutoSize = false,
+            Width = 220,
+            Height = 48
+        };
+        _fontScaleSlider.ValueChanged += (_, _) =>
+        {
+            if (!_updatingFontScaleSlider)
+                Dispatcher.Invoke(() => SetFontScale(_fontScaleSlider.Value));
+        };
+        fontScaleMenu.DropDownItems.Add(new Forms.ToolStripControlHost(_fontScaleSlider)
+        {
+            AutoSize = false,
+            Width = 230,
+            Height = 50,
+            Margin = new Forms.Padding(4, 2, 4, 2)
+        });
+        _fontScaleValueItem = new Forms.ToolStripMenuItem("当前：100%") { Enabled = false };
+        fontScaleMenu.DropDownItems.Add(_fontScaleValueItem);
+        appearanceMenu.DropDownItems.Add(fontScaleMenu);
         var opacityMenu = new Forms.ToolStripMenuItem("歌词透明度");
         _opacitySlider = new Forms.TrackBar
         {
@@ -860,6 +888,14 @@ internal sealed class OverlayWindow : Window
             _updatingOpacitySlider = false;
         }
         if (_opacityValueItem is not null) _opacityValueItem.Text = $"当前：{opacityPercentage}%";
+        var fontScalePercentage = (int)Math.Round(Math.Clamp(_config.FontScale, 0.5, 2.0) * 100);
+        if (_fontScaleSlider is not null)
+        {
+            _updatingFontScaleSlider = true;
+            _fontScaleSlider.Value = fontScalePercentage;
+            _updatingFontScaleSlider = false;
+        }
+        if (_fontScaleValueItem is not null) _fontScaleValueItem.Text = $"当前：{fontScalePercentage}%";
     }
 
     private void TogglePositionLock()
@@ -878,6 +914,33 @@ internal sealed class OverlayWindow : Window
         Opacity = _config.LyricOpacity;
         _config.Save();
         if (_opacityValueItem is not null) _opacityValueItem.Text = $"当前：{percentage}%";
+    }
+
+    private void SetFontScale(int percentage)
+    {
+        percentage = Math.Clamp(percentage, 50, 200);
+        _config.FontScale = percentage / 100.0;
+        _config.Save();
+        ApplyConfiguredFontSizes();
+        if (_fontScaleValueItem is not null) _fontScaleValueItem.Text = $"当前：{percentage}%";
+        _activeLineIndex = int.MinValue;
+        ClearAllLyrics();
+        if (_lyrics.Count > 0 && _clockInitialized) EnsureActiveLine(CurrentPlaybackPosition());
+    }
+
+    private double ScaledCurrentFontSize =>
+        _config.CurrentFontSize * Math.Clamp(_config.FontScale, 0.5, 2.0);
+
+    private double ScaledContextFontSize =>
+        _config.ContextFontSize * Math.Clamp(_config.FontScale, 0.5, 2.0);
+
+    private void ApplyConfiguredFontSizes()
+    {
+        var scale = Math.Clamp(_config.FontScale, 0.5, 2.0);
+        _title.FontSize = Math.Max(6, (_config.ContextFontSize - 2) * scale);
+        _previous.FontSize = ScaledContextFontSize;
+        _next.FontSize = ScaledContextFontSize;
+        _status.FontSize = ScaledCurrentFontSize;
     }
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
