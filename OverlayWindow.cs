@@ -18,6 +18,9 @@ internal sealed class OverlayWindow : Window
     private const int WsExTransparent = 0x00000020;
     private const int WsExToolwindow = 0x00000080;
     private const int WsExNoactivate = 0x08000000;
+    private const int WmNcHitTest = 0x0084;
+    private const int HtTransparent = -1;
+    private const int HtClient = 1;
 
     private readonly Grid _root = new();
     private readonly StackPanel _standardPanel = new()
@@ -45,7 +48,9 @@ internal sealed class OverlayWindow : Window
     private Forms.ToolStripMenuItem? _performanceModeItem;
     private Forms.ToolStripMenuItem? _positionLockItem;
     private Forms.ToolStripMenuItem? _visibleLyricsMenu;
-    private readonly List<Forms.ToolStripMenuItem> _visibleLyricsItems = [];
+    private Forms.TrackBar? _visibleLyricsSlider;
+    private Forms.NumericUpDown? _visibleLyricsNumber;
+    private bool _updatingVisibleLyricsSlider;
     private Forms.TrackBar? _opacitySlider;
     private Forms.NumericUpDown? _opacityNumber;
     private bool _updatingOpacitySlider;
@@ -80,6 +85,7 @@ internal sealed class OverlayWindow : Window
     private bool _demoMode;
     private readonly bool _startInDemo;
     private readonly string? _startupModeOverride;
+    private HwndSource? _windowSource;
 
     public OverlayWindow(bool startInDemo = false, string? startupModeOverride = null)
     {
@@ -111,8 +117,7 @@ internal sealed class OverlayWindow : Window
         _tray = BuildTrayIcon();
         Loaded += OnLoaded;
         Closing += OnClosing;
-        SourceInitialized += (_, _) => UpdateInteractionMode();
-        MouseLeftButtonDown += OnMouseLeftButtonDown;
+        SourceInitialized += OnSourceInitialized;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -746,39 +751,13 @@ internal sealed class OverlayWindow : Window
 
     private void ApplyWindowMode()
     {
-        if (IsPerformanceMode())
-        {
-            Left = 0;
-            Top = 0;
-            Width = SystemParameters.PrimaryScreenWidth;
-            Height = SystemParameters.PrimaryScreenHeight;
-        }
-        else
-        {
-            var requestedWidth = _config.Width * EffectiveFontScale;
-            var contextLineCount = (_config.ShowSongTitle ? 1 : 0) +
-                                   (_config.ShowPreviousLine ? 1 : 0) +
-                                   (_config.ShowNextLine ? 1 : 0);
-            var lyricStackHeight = VisibleLyricsLimit *
-                                   (ScaledCurrentFontSize * 1.55 + ScaledLayoutPixels(8));
-            var requestedHeight = Math.Max(
-                _config.Height * EffectiveFontScale,
-                lyricStackHeight +
-                contextLineCount * ScaledContextFontSize * 1.4 + ScaledLayoutPixels(32));
-            Width = Math.Min(SystemParameters.PrimaryScreenWidth, Math.Max(300, requestedWidth));
-            Height = Math.Min(SystemParameters.PrimaryScreenHeight, Math.Max(100, requestedHeight));
-            Top = _config.Top >= 0
-                ? Math.Clamp(_config.Top, 0, Math.Max(0, SystemParameters.PrimaryScreenHeight - Height))
-                : Math.Max(0, SystemParameters.PrimaryScreenHeight * 0.64 - Height / 2);
-            Left = _config.Left >= 0
-                ? Math.Clamp(_config.Left, 0, Math.Max(0, SystemParameters.PrimaryScreenWidth - Width))
-                : Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
-
-            var reservedContextHeight = contextLineCount * ScaledContextFontSize * 1.4;
-            var layoutPadding = ScaledLayoutPixels(24);
-            _status.MaxWidth = Math.Max(100, Width - layoutPadding);
-            _status.MaxHeight = Math.Max(40, Height - reservedContextHeight - layoutPadding);
-        }
+        Left = 0;
+        Top = 0;
+        Width = SystemParameters.PrimaryScreenWidth;
+        Height = SystemParameters.PrimaryScreenHeight;
+        var layoutPadding = ScaledLayoutPixels(24);
+        _status.MaxWidth = Math.Max(100, Width - layoutPadding);
+        _status.MaxHeight = Math.Max(40, Height - layoutPadding);
     }
 
     private bool IsPerformanceMode() =>
@@ -816,15 +795,38 @@ internal sealed class OverlayWindow : Window
         menu.Items.Add(modeMenu);
 
         _visibleLyricsMenu = new Forms.ToolStripMenuItem("屏幕歌词数量");
-        for (var count = 1; count <= 10; count++)
+        _visibleLyricsSlider = new Forms.TrackBar
         {
-            var selectedCount = count;
-            var item = new Forms.ToolStripMenuItem(
-                $"最多 {selectedCount} 条", null,
-                (_, _) => Dispatcher.Invoke(() => SetVisibleLyricsLimit(selectedCount)));
-            _visibleLyricsItems.Add(item);
-            _visibleLyricsMenu.DropDownItems.Add(item);
-        }
+            Minimum = 1,
+            Maximum = 10,
+            Value = 2,
+            TickFrequency = 1,
+            SmallChange = 1,
+            LargeChange = 1,
+            AutoSize = false,
+            Width = 220,
+            Height = 48
+        };
+        _visibleLyricsSlider.ValueChanged += (_, _) =>
+        {
+            if (!_updatingVisibleLyricsSlider)
+                Dispatcher.Invoke(() => SetVisibleLyricsLimit(_visibleLyricsSlider.Value));
+        };
+        _visibleLyricsMenu.DropDownItems.Add(new Forms.ToolStripControlHost(_visibleLyricsSlider)
+        {
+            AutoSize = false,
+            Width = 230,
+            Height = 50,
+            Margin = new Forms.Padding(4, 2, 4, 2)
+        });
+        _visibleLyricsNumber = NewPercentageInput(1, 10, 2);
+        _visibleLyricsNumber.ValueChanged += (_, _) =>
+        {
+            if (!_updatingVisibleLyricsSlider)
+                Dispatcher.Invoke(() => SetVisibleLyricsLimit((int)_visibleLyricsNumber.Value));
+        };
+        _visibleLyricsMenu.DropDownItems.Add(NewInputHost(_visibleLyricsNumber, "数量：", "条"));
+        _visibleLyricsMenu.DropDownOpening += (_, _) => Dispatcher.Invoke(RefreshMenuChecks);
         menu.Items.Add(_visibleLyricsMenu);
 
         _positionLockItem = new Forms.ToolStripMenuItem(
@@ -993,8 +995,13 @@ internal sealed class OverlayWindow : Window
         if (_performanceModeItem is not null) _performanceModeItem.Checked = IsPerformanceMode();
         if (_visibleLyricsMenu is not null)
             _visibleLyricsMenu.Text = $"屏幕歌词数量（最多 {VisibleLyricsLimit} 条）";
-        for (var i = 0; i < _visibleLyricsItems.Count; i++)
-            _visibleLyricsItems[i].Checked = i + 1 == VisibleLyricsLimit;
+        if (_visibleLyricsSlider is not null)
+        {
+            _updatingVisibleLyricsSlider = true;
+            _visibleLyricsSlider.Value = VisibleLyricsLimit;
+            if (_visibleLyricsNumber is not null) _visibleLyricsNumber.Value = VisibleLyricsLimit;
+            _updatingVisibleLyricsSlider = false;
+        }
         if (_positionLockItem is not null)
         {
             _positionLockItem.Checked = _config.PositionLocked;
@@ -1034,6 +1041,12 @@ internal sealed class OverlayWindow : Window
     private void SetVisibleLyricsLimit(int value)
     {
         value = Math.Clamp(value, 1, 10);
+        _updatingVisibleLyricsSlider = true;
+        if (_visibleLyricsSlider is not null && _visibleLyricsSlider.Value != value)
+            _visibleLyricsSlider.Value = value;
+        if (_visibleLyricsNumber is not null && _visibleLyricsNumber.Value != value)
+            _visibleLyricsNumber.Value = value;
+        _updatingVisibleLyricsSlider = false;
         if (_config.MaxVisibleLyrics == value) return;
         _config.MaxVisibleLyrics = value;
         _config.Save();
@@ -1149,7 +1162,13 @@ internal sealed class OverlayWindow : Window
         ThousandsSeparator = false
     };
 
-    private static Forms.ToolStripControlHost NewPercentageInputHost(Forms.Control input)
+    private static Forms.ToolStripControlHost NewPercentageInputHost(Forms.Control input) =>
+        NewInputHost(input, "百分比：", "%");
+
+    private static Forms.ToolStripControlHost NewInputHost(
+        Forms.Control input,
+        string label,
+        string suffix)
     {
         var panel = new Forms.FlowLayoutPanel
         {
@@ -1162,14 +1181,14 @@ internal sealed class OverlayWindow : Window
         };
         panel.Controls.Add(new Forms.Label
         {
-            Text = "百分比：",
+            Text = label,
             AutoSize = true,
             Margin = new Forms.Padding(0, 4, 2, 0)
         });
         panel.Controls.Add(input);
         panel.Controls.Add(new Forms.Label
         {
-            Text = "%",
+            Text = suffix,
             AutoSize = true,
             Margin = new Forms.Padding(2, 4, 0, 0)
         });
@@ -1225,20 +1244,54 @@ internal sealed class OverlayWindow : Window
         visual.Container.LostMouseCapture += (_, _) => visual.IsDragging = false;
     }
 
-    private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void OnSourceInitialized(object? sender, EventArgs eventArgs)
     {
-        if (IsPerformanceMode() || _config.PositionLocked || e.ChangedButton != MouseButton.Left) return;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        _windowSource = HwndSource.FromHwnd(hwnd);
+        _windowSource?.AddHook(WindowMessageHook);
+        UpdateInteractionMode();
+    }
+
+    private IntPtr WindowMessageHook(
+        IntPtr hwnd,
+        int message,
+        IntPtr wParam,
+        IntPtr lParam,
+        ref bool handled)
+    {
+        if (message != WmNcHitTest || IsPerformanceMode() || _config.PositionLocked)
+            return IntPtr.Zero;
+
+        var packedPoint = lParam.ToInt64();
+        var screenPoint = new Point(
+            unchecked((short)(packedPoint & 0xFFFF)),
+            unchecked((short)((packedPoint >> 16) & 0xFFFF)));
+        Point windowPoint;
         try
         {
-            DragMove();
-            _config.Left = Left;
-            _config.Top = Top;
-            _config.Save();
+            windowPoint = PointFromScreen(screenPoint);
         }
         catch (InvalidOperationException)
         {
-            // The mouse button may be released between the event and DragMove.
+            return IntPtr.Zero;
         }
+
+        foreach (var line in _standardLines)
+        {
+            if (!line.Container.IsVisible || line.Container.Opacity <= 0.02 ||
+                line.Container.ActualWidth <= 0 || line.Container.ActualHeight <= 0) continue;
+            var origin = line.Container.TranslatePoint(new Point(0, 0), this);
+            var bounds = new Rect(origin, new Size(
+                line.Container.ActualWidth,
+                line.Container.ActualHeight));
+            bounds.Inflate(ScaledLayoutPixels(8), ScaledLayoutPixels(6));
+            if (!bounds.Contains(windowPoint)) continue;
+            handled = true;
+            return new IntPtr(HtClient);
+        }
+
+        handled = true;
+        return new IntPtr(HtTransparent);
     }
 
     private void ImportFont()
@@ -1377,7 +1430,7 @@ internal sealed class OverlayWindow : Window
         else
             style &= ~(WsExTransparent | WsExNoactivate);
         SetWindowLongPtr(hwnd, GwlExstyle, new IntPtr(style));
-        Cursor = clickThrough ? null : Cursors.SizeAll;
+        Cursor = null;
         foreach (var line in _standardLines)
             line.Container.Cursor = clickThrough ? null : Cursors.SizeAll;
     }
@@ -1390,6 +1443,8 @@ internal sealed class OverlayWindow : Window
         _animationTimer?.Stop();
         CancelLyricsLoad();
         _media.Dispose();
+        _windowSource?.RemoveHook(WindowMessageHook);
+        _windowSource = null;
         _tray.Visible = false;
         _tray.Dispose();
     }
