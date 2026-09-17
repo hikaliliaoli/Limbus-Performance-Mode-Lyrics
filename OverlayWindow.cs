@@ -416,21 +416,28 @@ internal sealed class OverlayWindow : Window
         CreateGlyphs(glyphPanel, glyphs, text, index);
         var viewbox = NewViewbox();
         viewbox.MaxWidth = Math.Max(300, SystemParameters.PrimaryScreenWidth * 0.72);
-        viewbox.MaxHeight = ScaledCurrentFontSize * 1.8;
+        viewbox.MaxHeight = Math.Min(
+            SystemParameters.PrimaryScreenHeight * 0.72,
+            ScaledCurrentFontSize * 1.8 + ScaledLayoutPixels(16));
         viewbox.Child = glyphPanel;
         var container = new Grid { Opacity = 1 };
         container.Children.Add(viewbox);
 
         var random = new Random(HashCode.Combine(_songKey, index, text));
+        var edgeMargin = Math.Min(ScaledLayoutPixels(30), SystemParameters.PrimaryScreenWidth * 0.22);
+        var trailingMargin = Math.Min(ScaledLayoutPixels(40), SystemParameters.PrimaryScreenWidth * 0.22);
         var estimatedWidth = Math.Min(SystemParameters.PrimaryScreenWidth * 0.72,
-            Math.Max(180, text.Length * ScaledCurrentFontSize * 0.72));
-        var maxX = Math.Max(30, SystemParameters.PrimaryScreenWidth - estimatedWidth - 40);
-        var x = 30 + random.NextDouble() * Math.Max(1, maxX - 30);
+            Math.Max(ScaledLayoutPixels(180), text.Length * ScaledCurrentFontSize * 0.72));
+        var maxX = Math.Max(edgeMargin, SystemParameters.PrimaryScreenWidth - estimatedWidth - trailingMargin);
+        var x = edgeMargin + random.NextDouble() * Math.Max(1, maxX - edgeMargin);
         var minY = SystemParameters.PrimaryScreenHeight * 0.13;
         var maxY = SystemParameters.PrimaryScreenHeight * 0.78;
         var y = minY + random.NextDouble() * Math.Max(1, maxY - minY);
-        if (_performanceLines.Count > 0 && Math.Abs(y - _performanceLines[^1].BaseY) < 130)
-            y = y + 180 < maxY ? y + 180 : Math.Max(minY, y - 180);
+        var verticalRange = Math.Max(1, maxY - minY);
+        var separation = Math.Min(Math.Abs(ScaledMotionPixels(130)), verticalRange * 0.45);
+        var separationShift = Math.Min(Math.Abs(ScaledMotionPixels(180)), verticalRange * 0.55);
+        if (_performanceLines.Count > 0 && Math.Abs(y - _performanceLines[^1].BaseY) < separation)
+            y = y + separationShift < maxY ? y + separationShift : Math.Max(minY, y - separationShift);
 
         Canvas.SetLeft(container, x);
         Canvas.SetTop(container, y);
@@ -482,9 +489,9 @@ internal sealed class OverlayWindow : Window
             var timing = CalculatePerformanceTiming(position, line.Start, line.End, line.Glyphs.Count);
             AnimateGlyphs(line.Glyphs, timing, useIndividualDrift: false);
             line.Container.Opacity = opacity;
-            line.Translate.X = Math.Sin(motionTime * 0.8 + line.LineIndex) * 1.5;
-            line.Translate.Y = line.Direction * _config.PerformanceRisePixels * progress +
-                               Math.Sin(motionTime * 1.1 + line.LineIndex * 0.7) * 1.2;
+            line.Translate.X = Math.Sin(motionTime * 0.8 + line.LineIndex) * ScaledMotionPixels(1.5);
+            line.Translate.Y = line.Direction * ScaledMotionPixels(_config.PerformanceRisePixels) * progress +
+                               Math.Sin(motionTime * 1.1 + line.LineIndex * 0.7) * ScaledMotionPixels(1.2);
             line.Rotate.Angle = line.BaseAngle + line.Direction * 0.65 * progress +
                                 Math.Sin(motionTime * 0.7 + line.LineIndex) * 0.12;
         }
@@ -542,13 +549,13 @@ internal sealed class OverlayWindow : Window
             var item = glyphs[i];
             var appear = Math.Clamp((timing.Local - i * stagger) / fadeIn, 0, 1);
             var eased = 1 - Math.Pow(1 - appear, 3);
-            var jitterStrength = _config.CharacterJitterPixels * eased;
+            var jitterStrength = ScaledMotionPixels(_config.CharacterJitterPixels) * eased;
             var jitterX = Math.Sin(motionTime * item.Frequency * 0.73 + item.Phase) * jitterStrength * 0.55;
             var jitterY = Math.Sin(motionTime * item.Frequency + item.Phase * 1.31) * jitterStrength;
             var drift = useIndividualDrift
-                ? item.Direction * _config.CharacterDriftPixels * (timing.Progress - 0.5)
+                ? item.Direction * ScaledMotionPixels(_config.CharacterDriftPixels) * (timing.Progress - 0.5)
                 : 0;
-            var entrance = -item.Direction * _config.CharacterDriftPixels * 1.25 * (1 - eased);
+            var entrance = -item.Direction * ScaledMotionPixels(_config.CharacterDriftPixels) * 1.25 * (1 - eased);
             item.Text.Opacity = eased * timing.GroupOpacity;
             item.Translate.X = jitterX;
             item.Translate.Y = drift + entrance + jitterY;
@@ -682,15 +689,14 @@ internal sealed class OverlayWindow : Window
         }
         else
         {
-            var widthGrowth = Math.Sqrt(Math.Max(1, EffectiveFontScale));
-            var requestedWidth = Math.Max(_config.Width, _config.Width * widthGrowth);
+            var requestedWidth = _config.Width * EffectiveFontScale;
             var contextLineCount = (_config.ShowSongTitle ? 1 : 0) +
                                    (_config.ShowPreviousLine ? 1 : 0) +
                                    (_config.ShowNextLine ? 1 : 0);
             var requestedHeight = Math.Max(
-                _config.Height,
+                _config.Height * EffectiveFontScale,
                 ScaledCurrentFontSize * 1.65 +
-                contextLineCount * ScaledContextFontSize * 1.4 + 32);
+                contextLineCount * ScaledContextFontSize * 1.4 + ScaledLayoutPixels(32));
             Width = Math.Min(SystemParameters.PrimaryScreenWidth, Math.Max(300, requestedWidth));
             Height = Math.Min(SystemParameters.PrimaryScreenHeight, Math.Max(100, requestedHeight));
             Top = _config.Top >= 0
@@ -701,10 +707,11 @@ internal sealed class OverlayWindow : Window
                 : Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
 
             var reservedContextHeight = contextLineCount * ScaledContextFontSize * 1.4;
-            _standardGlyphViewbox.MaxWidth = Math.Max(100, Width - 24);
-            _standardGlyphViewbox.MaxHeight = Math.Max(40, Height - reservedContextHeight - 24);
-            _status.MaxWidth = Math.Max(100, Width - 24);
-            _status.MaxHeight = Math.Max(40, Height - reservedContextHeight - 24);
+            var layoutPadding = ScaledLayoutPixels(24);
+            _standardGlyphViewbox.MaxWidth = Math.Max(100, Width - layoutPadding);
+            _standardGlyphViewbox.MaxHeight = Math.Max(40, Height - reservedContextHeight - layoutPadding);
+            _status.MaxWidth = Math.Max(100, Width - layoutPadding);
+            _status.MaxHeight = Math.Max(40, Height - reservedContextHeight - layoutPadding);
         }
     }
 
@@ -714,8 +721,8 @@ internal sealed class OverlayWindow : Window
     private System.Windows.Media.Effects.DropShadowEffect CreateShadow() => new()
     {
         Color = ((SolidColorBrush)ParseBrush(_config.ShadowColor, Colors.Black)).Color,
-        BlurRadius = 8,
-        ShadowDepth = 2,
+        BlurRadius = Math.Min(Math.Abs(ScaledMotionPixels(8)), 300),
+        ShadowDepth = Math.Min(Math.Abs(ScaledMotionPixels(2)), 160),
         Opacity = 1
     };
 
@@ -1002,6 +1009,20 @@ internal sealed class OverlayWindow : Window
     private double EffectiveFontScale =>
         double.IsFinite(_config.FontScale) && _config.FontScale > 0 ? _config.FontScale : 1.0;
 
+    private double ScaledMotionPixels(double value)
+    {
+        var screenLimit = Math.Max(SystemParameters.PrimaryScreenWidth, SystemParameters.PrimaryScreenHeight) * 2;
+        return Math.Clamp(value * EffectiveFontScale, -screenLimit, screenLimit);
+    }
+
+    private double ScaledLayoutPixels(double value)
+    {
+        var screenLimit = Math.Max(40, Math.Min(
+            SystemParameters.PrimaryScreenWidth,
+            SystemParameters.PrimaryScreenHeight) * 0.22);
+        return Math.Clamp(value * EffectiveFontScale, 0, screenLimit);
+    }
+
     private static double SafeFontSize(double value) => Math.Clamp(value, 0.1, 35_000);
 
     private void ApplyConfiguredFontSizes()
@@ -1010,6 +1031,13 @@ internal sealed class OverlayWindow : Window
         _previous.FontSize = ScaledContextFontSize;
         _next.FontSize = ScaledContextFontSize;
         _status.FontSize = ScaledCurrentFontSize;
+        var margin = new Thickness(
+            ScaledLayoutPixels(8),
+            ScaledLayoutPixels(1),
+            ScaledLayoutPixels(8),
+            ScaledLayoutPixels(2));
+        foreach (var block in new[] { _title, _previous, _next, _status })
+            block.Margin = margin;
     }
 
     private static Forms.NumericUpDown NewPercentageInput(int minimum, int maximum, int value) => new()
