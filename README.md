@@ -1,0 +1,73 @@
+# 网易云歌词悬浮层
+
+一个轻量的 Windows 桌面歌词工具。它从 Windows 的媒体会话读取网易云音乐当前播放的歌曲，查询逐行歌词，并用透明、无边框、始终置顶且鼠标穿透的“演出字幕”显示。
+
+程序每 250 毫秒独立检查网易云当前歌曲，歌词联网请求不会阻塞切歌检测。网易云 3.x 不向 Windows 报告播放秒数时，程序会只读解析客户端自身的本地播放日志，获得切歌、播放、暂停和拖动进度事件；拖动进度条后会自动校正。
+
+## 使用
+
+1. 打开网易云音乐桌面客户端并开始播放。
+2. 开发目录中可双击 `start.cmd`；分发版直接双击 `NeteaseLyricsOverlay.exe`。
+3. 右下角托盘找到“网易云歌词悬浮层”图标，可重新加载配置、打开配置文件或退出。
+
+托盘菜单还提供：
+
+- `歌词语言 → 原文 / 翻译`：即时切换；某句没有翻译时自动显示该句原歌词。
+- `显示模式 → 标准模式 / 演出模式`：标准模式固定位置逐字显示；演出模式使用全屏透明舞台。
+- `字体与颜色 → 导入字体`：支持 `.ttf`、`.otf`，字体复制到个人配置目录后立即生效。
+- `字体与颜色 → 选择歌词颜色`：通过系统颜色选择器修改主歌词颜色。
+- `字体与颜色 → 歌词透明度`：可选择 20%～100% 的整体透明度。
+- `锁定歌词位置`：标准模式下取消锁定后，按住歌词区域即可拖动；重新锁定后恢复鼠标穿透并保存位置。
+- `动画效果预览`：不依赖播放器，循环预览逐字升降、抖动和渐隐效果。
+- `返回网易云同步`：结束预览，恢复读取网易云。
+- `歌词提前/延后 0.5 秒`：现场微调歌词时间，调整值会写入配置。
+
+`publish/win-x64` 中的分发版已经包含 .NET 运行时，适用于 64 位 Windows 10/11，不需要安装 Python、.NET SDK 或桌面运行库。
+
+## 生成可分发版本
+
+双击 `publish.cmd`，或在 PowerShell 中执行 `./publish.ps1`。生成目录为 `publish/win-x64`。把整个目录压缩后即可发给其他人；他们只需解压并双击其中的 `NeteaseLyricsOverlay.exe`。
+
+## 显示格式
+
+默认使用标准模式：主歌词固定在屏幕中下部并逐字显示。`Top` 设置为 `-1` 时使用自动位置。
+
+演出模式中，每句歌词会选择一个可复现的随机屏幕位置，整句带轻微倾斜并缓慢上升或下降。屏幕最多保留两句；当前句播放到约 70% 后，上一句才开始慢慢消散。
+
+逐字动画根据每句 LRC 时间戳估算，因为普通 LRC 通常没有逐字时间戳。可调整：
+
+- `AnimationFps`：动画帧率，默认 45。
+- `CharactersPerSecond`：逐字显现速度。
+- `CharacterFadeInMilliseconds`：单字淡入时间。
+- `LineFadeOutMilliseconds`：整句淡出时间。
+- `CharacterDriftPixels`：每个字持续升降的距离。
+- `CharacterJitterPixels`：轻微抖动幅度。
+- `DisplayMode`：`Standard` 或 `Performance`。
+- `LyricLanguage`：`Original` 或 `Translation`。
+- `PerformanceRisePixels`：演出模式整句升降距离。
+- `PerformanceTiltDegrees`：演出模式最大初始倾斜角。
+- `PerformancePreviousFadeStart`：当前句播放到什么比例后，上一句开始淡出。
+
+首次运行后，程序会在 `%LOCALAPPDATA%\NeteaseLyricsOverlay\config.json` 生成个人配置。通过托盘菜单选择“打开配置文件”最方便；修改后选择“重新加载配置”即可生效。常用字段：
+
+- `Top`：距离屏幕顶部的像素。
+- `Left`：标准模式距离屏幕左侧的像素；拖动后自动保存。
+- `LyricOpacity`：歌词窗口整体透明度，范围 `0.15`～`1.0`。
+- `PositionLocked`：是否锁定标准模式位置并启用鼠标穿透。
+- `CurrentFontSize` / `ContextFontSize`：当前歌词/辅助文字字号。
+- `CurrentColor` / `ContextColor`：ARGB 或 RGB 颜色，如 `#FFF3C44E`。
+- `ShowPreviousLine`、`ShowNextLine`：控制标准模式的辅助行。
+- `LyricOffsetMilliseconds`：歌词时间偏移；正数让歌词更早切换，负数让歌词更晚切换。
+- `LineFormat`：支持 `{lyric}`。
+- `TranslationFormat`：支持 `{translation}`。
+- `TitleFormat`：支持 `{title}` 和 `{artist}`。
+
+## 说明
+
+- 程序不读取账号、Cookie 或密码，也不会修改或向网易云注入代码。歌曲信息优先来自网易云在本机写入的播放日志，并以 Windows 媒体元数据作为兼容来源。
+- 歌词查询需要联网。程序优先使用 LRCLIB 的公开同步歌词，未命中时再尝试网易云网页歌词接口；这是为了避免网易云未登录搜索偶尔把原唱匹配成翻唱。
+- 如果一直显示“等待网易云音乐播放”，请确认使用的是网易云音乐 Windows 桌面客户端，且 Windows 的媒体音量浮层能显示当前歌曲信息。
+- 网易云 3.x 通常不会向 Windows 提供当前播放位置和总时长。程序会自动读取 `%LOCALAPPDATA%\NetEase\CloudMusic\cloudmusic.elog` 中的播放事件并在本地推算实时位置；播放、暂停、切歌和拖动后都会重新校准。
+- 如果网易云以管理员身份运行，悬浮层也需要以管理员身份运行，否则 Windows 会阻止跨权限读取实时进度。
+- 某些仅会员可见或无滚动歌词的歌曲可能显示“暂无歌词”。
+- 分发版没有商业代码签名证书，首次从网络下载后 Windows SmartScreen 可能提示“未知发布者”；这是签名信誉提示，不代表缺少运行环境。

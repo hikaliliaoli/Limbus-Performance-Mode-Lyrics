@@ -1,0 +1,8 @@
+bin/
+obj/
+publish/
+*.zip
+*diagnostic*.json
+*.user
+*.suo
+.vs/
