@@ -46,10 +46,10 @@ internal sealed class OverlayWindow : Window
     private Forms.ToolStripMenuItem? _performanceModeItem;
     private Forms.ToolStripMenuItem? _positionLockItem;
     private Forms.TrackBar? _opacitySlider;
-    private Forms.ToolStripMenuItem? _opacityValueItem;
+    private Forms.NumericUpDown? _opacityNumber;
     private bool _updatingOpacitySlider;
     private Forms.TrackBar? _fontScaleSlider;
-    private Forms.ToolStripMenuItem? _fontScaleValueItem;
+    private Forms.NumericUpDown? _fontScaleNumber;
     private bool _updatingFontScaleSlider;
 
     private DispatcherTimer _pollTimer = null!;
@@ -760,8 +760,13 @@ internal sealed class OverlayWindow : Window
             Height = 50,
             Margin = new Forms.Padding(4, 2, 4, 2)
         });
-        _fontScaleValueItem = new Forms.ToolStripMenuItem("当前：100%") { Enabled = false };
-        fontScaleMenu.DropDownItems.Add(_fontScaleValueItem);
+        _fontScaleNumber = NewPercentageInput(50, 200, 100);
+        _fontScaleNumber.ValueChanged += (_, _) =>
+        {
+            if (!_updatingFontScaleSlider)
+                Dispatcher.Invoke(() => SetFontScale((int)_fontScaleNumber.Value));
+        };
+        fontScaleMenu.DropDownItems.Add(NewPercentageInputHost(_fontScaleNumber));
         appearanceMenu.DropDownItems.Add(fontScaleMenu);
         var opacityMenu = new Forms.ToolStripMenuItem("歌词透明度");
         _opacitySlider = new Forms.TrackBar
@@ -788,8 +793,13 @@ internal sealed class OverlayWindow : Window
             Height = 50,
             Margin = new Forms.Padding(4, 2, 4, 2)
         });
-        _opacityValueItem = new Forms.ToolStripMenuItem("当前：100%") { Enabled = false };
-        opacityMenu.DropDownItems.Add(_opacityValueItem);
+        _opacityNumber = NewPercentageInput(0, 100, 100);
+        _opacityNumber.ValueChanged += (_, _) =>
+        {
+            if (!_updatingOpacitySlider)
+                Dispatcher.Invoke(() => SetLyricOpacity((int)_opacityNumber.Value));
+        };
+        opacityMenu.DropDownItems.Add(NewPercentageInputHost(_opacityNumber));
         appearanceMenu.DropDownItems.Add(opacityMenu);
         menu.Items.Add(appearanceMenu);
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -885,17 +895,17 @@ internal sealed class OverlayWindow : Window
         {
             _updatingOpacitySlider = true;
             _opacitySlider.Value = opacityPercentage;
+            if (_opacityNumber is not null) _opacityNumber.Value = opacityPercentage;
             _updatingOpacitySlider = false;
         }
-        if (_opacityValueItem is not null) _opacityValueItem.Text = $"当前：{opacityPercentage}%";
         var fontScalePercentage = (int)Math.Round(Math.Clamp(_config.FontScale, 0.5, 2.0) * 100);
         if (_fontScaleSlider is not null)
         {
             _updatingFontScaleSlider = true;
             _fontScaleSlider.Value = fontScalePercentage;
+            if (_fontScaleNumber is not null) _fontScaleNumber.Value = fontScalePercentage;
             _updatingFontScaleSlider = false;
         }
-        if (_fontScaleValueItem is not null) _fontScaleValueItem.Text = $"当前：{fontScalePercentage}%";
     }
 
     private void TogglePositionLock()
@@ -910,19 +920,29 @@ internal sealed class OverlayWindow : Window
     private void SetLyricOpacity(int percentage)
     {
         percentage = Math.Clamp(percentage, 0, 100);
+        _updatingOpacitySlider = true;
+        if (_opacitySlider is not null && _opacitySlider.Value != percentage)
+            _opacitySlider.Value = percentage;
+        if (_opacityNumber is not null && _opacityNumber.Value != percentage)
+            _opacityNumber.Value = percentage;
+        _updatingOpacitySlider = false;
         _config.LyricOpacity = percentage / 100.0;
         Opacity = _config.LyricOpacity;
         _config.Save();
-        if (_opacityValueItem is not null) _opacityValueItem.Text = $"当前：{percentage}%";
     }
 
     private void SetFontScale(int percentage)
     {
         percentage = Math.Clamp(percentage, 50, 200);
+        _updatingFontScaleSlider = true;
+        if (_fontScaleSlider is not null && _fontScaleSlider.Value != percentage)
+            _fontScaleSlider.Value = percentage;
+        if (_fontScaleNumber is not null && _fontScaleNumber.Value != percentage)
+            _fontScaleNumber.Value = percentage;
+        _updatingFontScaleSlider = false;
         _config.FontScale = percentage / 100.0;
         _config.Save();
         ApplyConfiguredFontSizes();
-        if (_fontScaleValueItem is not null) _fontScaleValueItem.Text = $"当前：{percentage}%";
         _activeLineIndex = int.MinValue;
         ClearAllLyrics();
         if (_lyrics.Count > 0 && _clockInitialized) EnsureActiveLine(CurrentPlaybackPosition());
@@ -941,6 +961,51 @@ internal sealed class OverlayWindow : Window
         _previous.FontSize = ScaledContextFontSize;
         _next.FontSize = ScaledContextFontSize;
         _status.FontSize = ScaledCurrentFontSize;
+    }
+
+    private static Forms.NumericUpDown NewPercentageInput(int minimum, int maximum, int value) => new()
+    {
+        Minimum = minimum,
+        Maximum = maximum,
+        Value = value,
+        Increment = 1,
+        DecimalPlaces = 0,
+        Width = 82,
+        TextAlign = Forms.HorizontalAlignment.Right,
+        ThousandsSeparator = false
+    };
+
+    private static Forms.ToolStripControlHost NewPercentageInputHost(Forms.NumericUpDown input)
+    {
+        var panel = new Forms.FlowLayoutPanel
+        {
+            AutoSize = false,
+            Width = 230,
+            Height = 34,
+            WrapContents = false,
+            FlowDirection = Forms.FlowDirection.LeftToRight,
+            Padding = new Forms.Padding(8, 4, 4, 2)
+        };
+        panel.Controls.Add(new Forms.Label
+        {
+            Text = "百分比：",
+            AutoSize = true,
+            Margin = new Forms.Padding(0, 4, 2, 0)
+        });
+        panel.Controls.Add(input);
+        panel.Controls.Add(new Forms.Label
+        {
+            Text = "%",
+            AutoSize = true,
+            Margin = new Forms.Padding(2, 4, 0, 0)
+        });
+        return new Forms.ToolStripControlHost(panel)
+        {
+            AutoSize = false,
+            Width = 230,
+            Height = 36,
+            Margin = new Forms.Padding(4, 0, 4, 3)
+        };
     }
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
