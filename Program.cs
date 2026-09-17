@@ -115,7 +115,63 @@ internal static class Program
         {
             Environment.ExitCode = 6;
         }
+
+        var chineseLyrics = new[]
+        {
+            "黑夜里的梦想仍在燃烧",
+            "穿过沉默寻找最后的微光",
+            "世界尽头留下遥远的回声"
+        };
+        var chineseKeywords = KeywordSelector.Select(chineseLyrics, "self-test-chinese")
+            .SelectMany(pair => pair.Value)
+            .ToArray();
+        if (chineseKeywords.Length != 2 ||
+            chineseKeywords.Any(span => !span.Text.All(IsHanForSelfTest)))
+        {
+            Environment.ExitCode = 7;
+        }
+
+        var japaneseLyrics = new[]
+        {
+            "深い夜のなかでひかりを探して",
+            "壊れた世界にこころを残した",
+            "遠い夢から静かな声が聞こえる"
+        };
+        var japaneseKeywords = KeywordSelector.Select(japaneseLyrics, "self-test-japanese")
+            .SelectMany(pair => pair.Value)
+            .ToArray();
+        if (japaneseKeywords.Length != 2 || japaneseKeywords.Any(span =>
+                !(span.Text.All(IsHanForSelfTest) || span.Text.All(IsHiraganaForSelfTest))))
+        {
+            Environment.ExitCode = 8;
+        }
+
+        var englishLyrics = new[]
+        {
+            "Carry the final flame through endless night",
+            "Broken memories awaken under silver skies",
+            "Follow every heartbeat beyond the silence"
+        };
+        var englishSelections = KeywordSelector.Select(englishLyrics, "self-test-english");
+        var englishKeywords = englishSelections.SelectMany(pair => pair.Value).ToArray();
+        var highlightedEnglishUnits = englishSelections.Sum(pair =>
+            KeywordSelector.BuildAnimationUnits(englishLyrics[pair.Key], pair.Value)
+                .Count(unit => unit.IsHighlighted));
+        if (englishKeywords.Length != 2 || highlightedEnglishUnits != englishKeywords.Length ||
+            englishKeywords.Any(span => span.Text.Any(character => !IsEnglishWordCharacter(character))))
+        {
+            Environment.ExitCode = 9;
+        }
     }
+
+    private static bool IsHanForSelfTest(char value) =>
+        value is >= '\u3400' and <= '\u4DBF' or >= '\u4E00' and <= '\u9FFF' or
+            >= '\uF900' and <= '\uFAFF' or '\u3005';
+
+    private static bool IsHiraganaForSelfTest(char value) => value is >= '\u3041' and <= '\u3096';
+
+    private static bool IsEnglishWordCharacter(char value) =>
+        value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '\'' or '-';
 
     private static async Task RunDiagnosticsAsync(string outputPath)
     {

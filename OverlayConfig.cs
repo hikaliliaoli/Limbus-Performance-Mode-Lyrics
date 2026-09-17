@@ -6,7 +6,7 @@ namespace NeteaseLyricsOverlay;
 
 internal sealed class OverlayConfig
 {
-    public int ConfigVersion { get; set; } = 7;
+    public int ConfigVersion { get; set; } = 8;
     public double Left { get; set; } = -1;
     public double Top { get; set; } = -1;
     public double Width { get; set; } = 1200;
@@ -22,6 +22,9 @@ internal sealed class OverlayConfig
     public double FontScale { get; set; } = 1.0;
     public int MaxVisibleLyrics { get; set; } = 2;
     public List<LyricSlotPosition> StandardLyricPositions { get; set; } = [];
+    public bool HighlightKeywordsEnabled { get; set; } = true;
+    public double HighlightKeywordScale { get; set; } = 1.4;
+    public string HighlightKeywordColor { get; set; } = "#FFFFC44D";
     public bool PositionLocked { get; set; } = true;
     public bool ShowSongTitle { get; set; } = false;
     public bool ShowTranslation { get; set; } = true;
@@ -78,14 +81,19 @@ internal sealed class OverlayConfig
             if (savedVersion < 5) config.ApplyVersion5Defaults();
             if (savedVersion < 6) config.ApplyVersion6Defaults();
             if (savedVersion < 7) config.ApplyVersion7Defaults();
+            if (savedVersion < 8) config.ApplyVersion8Defaults();
             config.MaxVisibleLyrics = Math.Clamp(config.MaxVisibleLyrics, 1, 10);
+            config.HighlightKeywordScale = Math.Clamp(
+                double.IsFinite(config.HighlightKeywordScale) ? config.HighlightKeywordScale : 1.4,
+                1.0,
+                2.0);
             config.StandardLyricPositions ??= [];
             foreach (var position in config.StandardLyricPositions)
             {
                 position.X = NormalizePosition(position.X);
                 position.Y = NormalizePosition(position.Y);
             }
-            if (savedVersion < 7) config.Save();
+            if (savedVersion < 8) config.Save();
             return config;
         }
         catch
@@ -158,6 +166,14 @@ internal sealed class OverlayConfig
     {
         ConfigVersion = 7;
         StandardLyricPositions = [];
+    }
+
+    private void ApplyVersion8Defaults()
+    {
+        ConfigVersion = 8;
+        HighlightKeywordsEnabled = true;
+        HighlightKeywordScale = 1.4;
+        HighlightKeywordColor = "#FFFFC44D";
     }
 
     private static double NormalizePosition(double value) =>

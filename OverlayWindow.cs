@@ -58,12 +58,20 @@ internal sealed class OverlayWindow : Window
     private Forms.TrackBar? _fontScaleSlider;
     private Forms.TextBox? _fontScaleText;
     private bool _updatingFontScaleSlider;
+    private Forms.ToolStripMenuItem? _keywordMenu;
+    private Forms.ToolStripMenuItem? _keywordEnabledItem;
+    private Forms.TrackBar? _keywordScaleSlider;
+    private Forms.NumericUpDown? _keywordScaleNumber;
+    private bool _updatingKeywordScaleSlider;
 
     private DispatcherTimer _pollTimer = null!;
     private DispatcherTimer _animationTimer = null!;
     private OverlayConfig _config = new();
     private FontFamily _activeFont = new("Microsoft YaHei UI");
     private IReadOnlyList<LyricLine> _lyrics = [];
+    private IReadOnlyDictionary<int, IReadOnlyList<KeywordSpan>> _keywordSelections =
+        new Dictionary<int, IReadOnlyList<KeywordSpan>>();
+    private string _keywordSelectionKey = string.Empty;
     private string _songKey = string.Empty;
     private DateTimeOffset _nextLyricsRetry = DateTimeOffset.MinValue;
     private bool _pollRunning;
@@ -622,13 +630,15 @@ internal sealed class OverlayWindow : Window
             var item = glyphs[i];
             var appear = Math.Clamp((timing.Local - i * stagger) / fadeIn, 0, 1);
             var eased = 1 - Math.Pow(1 - appear, 3);
-            var jitterStrength = ScaledMotionPixels(_config.CharacterJitterPixels) * eased;
+            var jitterStrength = ScaledMotionPixels(_config.CharacterJitterPixels) * item.RelativeScale * eased;
             var jitterX = Math.Sin(motionTime * item.Frequency * 0.73 + item.Phase) * jitterStrength * 0.55;
             var jitterY = Math.Sin(motionTime * item.Frequency + item.Phase * 1.31) * jitterStrength;
             var drift = useIndividualDrift
-                ? item.Direction * ScaledMotionPixels(_config.CharacterDriftPixels) * (timing.Progress - 0.5)
+                ? item.Direction * ScaledMotionPixels(_config.CharacterDriftPixels) * item.RelativeScale *
+                  (timing.Progress - 0.5)
                 : 0;
-            var entrance = -item.Direction * ScaledMotionPixels(_config.CharacterDriftPixels) * 1.25 * (1 - eased);
+            var entrance = -item.Direction * ScaledMotionPixels(_config.CharacterDriftPixels) *
+                           item.RelativeScale * 1.25 * (1 - eased);
             item.Text.Opacity = eased * timing.GroupOpacity;
             item.Translate.X = jitterX;
             item.Translate.Y = drift + entrance + jitterY;
@@ -639,9 +649,11 @@ internal sealed class OverlayWindow : Window
 
     private void CreateGlyphs(StackPanel panel, List<AnimatedGlyph> target, string text, int lineIndex)
     {
-        var elements = EnumerateTextElements(text);
-        for (var i = 0; i < elements.Count; i++)
+        var units = KeywordSelector.BuildAnimationUnits(text, GetKeywordSpans(lineIndex));
+        for (var i = 0; i < units.Count; i++)
         {
+            var unit = units[i];
+            var relativeScale = unit.IsHighlighted ? EffectiveKeywordScale : 1.0;
             var translate = new TranslateTransform();
             var rotate = new RotateTransform();
             var transforms = new TransformGroup();
@@ -649,15 +661,17 @@ internal sealed class OverlayWindow : Window
             transforms.Children.Add(translate);
             var glyph = new TextBlock
             {
-                Text = elements[i] == " " ? "\u00A0" : elements[i],
+                Text = unit.Text == " " ? "\u00A0" : unit.Text,
                 FontFamily = _activeFont,
-                FontSize = ScaledCurrentFontSize,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = ParseBrush(_config.CurrentColor, Colors.White),
+                FontSize = SafeFontSize(ScaledCurrentFontSize * relativeScale),
+                FontWeight = unit.IsHighlighted ? FontWeights.Bold : FontWeights.SemiBold,
+                Foreground = unit.IsHighlighted
+                    ? ParseBrush(_config.HighlightKeywordColor, System.Windows.Media.Color.FromRgb(255, 196, 77))
+                    : ParseBrush(_config.CurrentColor, Colors.White),
                 Opacity = 0,
                 RenderTransformOrigin = new Point(0.5, 0.5),
                 RenderTransform = transforms,
-                Effect = CreateShadow()
+                Effect = CreateShadow(relativeScale)
             };
             TextOptions.SetTextRenderingMode(glyph, TextRenderingMode.Grayscale);
             panel.Children.Add(glyph);
@@ -665,7 +679,8 @@ internal sealed class OverlayWindow : Window
             target.Add(new AnimatedGlyph(
                 glyph, translate, rotate, seed % 2 == 0 ? -1 : 1,
                 6.4 + Math.Abs(seed % 17) * 0.17,
-                Math.Abs(seed % 101) / 101.0 * Math.PI * 2));
+                Math.Abs(seed % 101) / 101.0 * Math.PI * 2,
+                relativeScale));
         }
     }
 
@@ -678,12 +693,28 @@ internal sealed class OverlayWindow : Window
         return string.IsNullOrWhiteSpace(line.Text) ? "♪" : line.Text;
     }
 
-    private static List<string> EnumerateTextElements(string text)
+    private IReadOnlyList<KeywordSpan>? GetKeywordSpans(int lineIndex)
     {
-        var result = new List<string>();
-        var enumerator = StringInfo.GetTextElementEnumerator(text);
-        while (enumerator.MoveNext()) result.Add(enumerator.GetTextElement());
-        return result;
+        if (!_config.HighlightKeywordsEnabled || lineIndex < 0 || lineIndex >= _lyrics.Count) return null;
+        EnsureKeywordSelections();
+        return _keywordSelections.GetValueOrDefault(lineIndex);
+    }
+
+    private void EnsureKeywordSelections()
+    {
+        var key = $"{_songKey}|{_config.LyricLanguage}|{_lyrics.Count}|" +
+                  $"{(_lyrics.Count > 0 ? _lyrics[0].Time.Ticks : 0)}|" +
+                  $"{(_lyrics.Count > 0 ? _lyrics[^1].Time.Ticks : 0)}";
+        if (string.Equals(key, _keywordSelectionKey, StringComparison.Ordinal)) return;
+        var lines = _lyrics.Select(GetDisplayText).ToArray();
+        _keywordSelections = KeywordSelector.Select(lines, key);
+        _keywordSelectionKey = key;
+    }
+
+    private void InvalidateKeywordSelections()
+    {
+        _keywordSelectionKey = string.Empty;
+        _keywordSelections = new Dictionary<int, IReadOnlyList<KeywordSpan>>();
     }
 
     private void SetTitle(string title, string artist)
@@ -725,6 +756,7 @@ internal sealed class OverlayWindow : Window
     private void ReloadConfig()
     {
         _config = OverlayConfig.Load();
+        InvalidateKeywordSelections();
         _activeFont = ImportedFontManager.Resolve(_config);
         ApplyWindowMode();
         Opacity = Math.Clamp(_config.LyricOpacity, 0.0, 1.0);
@@ -767,11 +799,11 @@ internal sealed class OverlayWindow : Window
     private bool IsPerformanceMode() =>
         string.Equals(_config.DisplayMode, "Performance", StringComparison.OrdinalIgnoreCase);
 
-    private System.Windows.Media.Effects.DropShadowEffect CreateShadow() => new()
+    private System.Windows.Media.Effects.DropShadowEffect CreateShadow(double relativeScale = 1.0) => new()
     {
         Color = ((SolidColorBrush)ParseBrush(_config.ShadowColor, Colors.Black)).Color,
-        BlurRadius = Math.Min(Math.Abs(ScaledMotionPixels(8)), 300),
-        ShadowDepth = Math.Min(Math.Abs(ScaledMotionPixels(2)), 160),
+        BlurRadius = Math.Min(Math.Abs(ScaledMotionPixels(8)) * relativeScale, 300),
+        ShadowDepth = Math.Min(Math.Abs(ScaledMotionPixels(2)) * relativeScale, 160),
         Opacity = 1
     };
 
@@ -841,6 +873,47 @@ internal sealed class OverlayWindow : Window
         appearanceMenu.DropDownItems.Add("导入字体…", null, (_, _) => ImportFont());
         appearanceMenu.DropDownItems.Add("恢复默认字体", null, (_, _) => ResetFont());
         appearanceMenu.DropDownItems.Add("选择歌词颜色…", null, (_, _) => ChooseLyricColor());
+        _keywordMenu = new Forms.ToolStripMenuItem("重点词");
+        _keywordEnabledItem = new Forms.ToolStripMenuItem(
+            "启用重点词", null, (_, _) => Dispatcher.Invoke(ToggleKeywordHighlighting));
+        _keywordMenu.DropDownItems.Add(_keywordEnabledItem);
+        _keywordMenu.DropDownItems.Add("选择重点词颜色…", null, (_, _) => ChooseKeywordColor());
+        var keywordScaleMenu = new Forms.ToolStripMenuItem("重点词大小");
+        _keywordScaleSlider = new Forms.TrackBar
+        {
+            Minimum = 100,
+            Maximum = 200,
+            Value = 140,
+            TickFrequency = 10,
+            SmallChange = 1,
+            LargeChange = 10,
+            AutoSize = false,
+            Width = 220,
+            Height = 48
+        };
+        _keywordScaleSlider.ValueChanged += (_, _) =>
+        {
+            if (!_updatingKeywordScaleSlider)
+                Dispatcher.Invoke(() => SetKeywordScale(_keywordScaleSlider.Value));
+        };
+        keywordScaleMenu.DropDownItems.Add(new Forms.ToolStripControlHost(_keywordScaleSlider)
+        {
+            AutoSize = false,
+            Width = 230,
+            Height = 50,
+            Margin = new Forms.Padding(4, 2, 4, 2)
+        });
+        _keywordScaleNumber = NewPercentageInput(100, 200, 140);
+        _keywordScaleNumber.ValueChanged += (_, _) =>
+        {
+            if (!_updatingKeywordScaleSlider)
+                Dispatcher.Invoke(() => SetKeywordScale((int)_keywordScaleNumber.Value));
+        };
+        keywordScaleMenu.DropDownItems.Add(NewPercentageInputHost(_keywordScaleNumber));
+        keywordScaleMenu.DropDownOpening += (_, _) => Dispatcher.Invoke(RefreshMenuChecks);
+        _keywordMenu.DropDownItems.Add(keywordScaleMenu);
+        _keywordMenu.DropDownOpening += (_, _) => Dispatcher.Invoke(RefreshMenuChecks);
+        appearanceMenu.DropDownItems.Add(_keywordMenu);
         var fontScaleMenu = new Forms.ToolStripMenuItem("整体字体大小");
         _fontScaleSlider = new Forms.TrackBar
         {
@@ -971,6 +1044,7 @@ internal sealed class OverlayWindow : Window
     {
         _config.LyricLanguage = language;
         _config.Save();
+        InvalidateKeywordSelections();
         RefreshMenuChecks();
         _activeLineIndex = int.MinValue;
         ClearAllLyrics();
@@ -1014,6 +1088,22 @@ internal sealed class OverlayWindow : Window
                 ? "锁定歌词位置（已锁定）"
                 : "锁定歌词位置（可拖动）";
         }
+        if (_keywordMenu is not null)
+            _keywordMenu.Text = _config.HighlightKeywordsEnabled ? "重点词（已开启）" : "重点词（已关闭）";
+        if (_keywordEnabledItem is not null)
+        {
+            _keywordEnabledItem.Checked = _config.HighlightKeywordsEnabled;
+            _keywordEnabledItem.Text = _config.HighlightKeywordsEnabled ? "启用重点词（已开启）" : "启用重点词（已关闭）";
+        }
+        var keywordScalePercentage = (int)Math.Round(
+            Math.Clamp(_config.HighlightKeywordScale, 1.0, 2.0) * 100);
+        if (_keywordScaleSlider is not null)
+        {
+            _updatingKeywordScaleSlider = true;
+            _keywordScaleSlider.Value = keywordScalePercentage;
+            if (_keywordScaleNumber is not null) _keywordScaleNumber.Value = keywordScalePercentage;
+            _updatingKeywordScaleSlider = false;
+        }
         var opacityPercentage = (int)Math.Round(Math.Clamp(_config.LyricOpacity, 0.0, 1.0) * 100);
         if (_opacitySlider is not null)
         {
@@ -1040,6 +1130,36 @@ internal sealed class OverlayWindow : Window
         _config.Save();
         UpdateInteractionMode();
         RefreshMenuChecks();
+    }
+
+    private void ToggleKeywordHighlighting()
+    {
+        _config.HighlightKeywordsEnabled = !_config.HighlightKeywordsEnabled;
+        _config.Save();
+        InvalidateKeywordSelections();
+        RefreshMenuChecks();
+        RebuildVisibleLyrics();
+    }
+
+    private void SetKeywordScale(int percentage)
+    {
+        percentage = Math.Clamp(percentage, 100, 200);
+        _updatingKeywordScaleSlider = true;
+        if (_keywordScaleSlider is not null && _keywordScaleSlider.Value != percentage)
+            _keywordScaleSlider.Value = percentage;
+        if (_keywordScaleNumber is not null && _keywordScaleNumber.Value != percentage)
+            _keywordScaleNumber.Value = percentage;
+        _updatingKeywordScaleSlider = false;
+        _config.HighlightKeywordScale = percentage / 100.0;
+        _config.Save();
+        RebuildVisibleLyrics();
+    }
+
+    private void RebuildVisibleLyrics()
+    {
+        _activeLineIndex = int.MinValue;
+        ClearAllLyrics();
+        if (_lyrics.Count > 0 && _clockInitialized) EnsureActiveLine(CurrentPlaybackPosition());
     }
 
     private void SetVisibleLyricsLimit(int value)
@@ -1120,6 +1240,12 @@ internal sealed class OverlayWindow : Window
 
     private double EffectiveFontScale =>
         double.IsFinite(_config.FontScale) && _config.FontScale > 0 ? _config.FontScale : 1.0;
+
+    private double EffectiveKeywordScale =>
+        Math.Clamp(
+            double.IsFinite(_config.HighlightKeywordScale) ? _config.HighlightKeywordScale : 1.4,
+            1.0,
+            2.0);
 
     private int VisibleLyricsLimit => Math.Clamp(_config.MaxVisibleLyrics, 1, 10);
 
@@ -1358,7 +1484,12 @@ internal sealed class OverlayWindow : Window
                     new Rect(new Point(0, 0), glyph.Text.RenderSize));
                 bounds.Union(glyphBounds);
             }
-            var shadowPadding = Math.Min(Math.Abs(ScaledMotionPixels(12)), 120);
+            var maximumRelativeScale = line.Glyphs.Count == 0
+                ? 1.0
+                : line.Glyphs.Max(glyph => glyph.RelativeScale);
+            var shadowPadding = Math.Min(
+                Math.Abs(ScaledMotionPixels(12)) * maximumRelativeScale,
+                160);
             bounds.Inflate(shadowPadding, shadowPadding);
             return bounds;
         }
@@ -1454,6 +1585,24 @@ internal sealed class OverlayWindow : Window
         _config.CurrentColor = $"#FF{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
         _config.Save();
         ReloadConfig();
+    }
+
+    private void ChooseKeywordColor()
+    {
+        using var dialog = new Forms.ColorDialog { FullOpen = true, AnyColor = true };
+        try
+        {
+            var color = ((SolidColorBrush)ParseBrush(_config.HighlightKeywordColor,
+                System.Windows.Media.Color.FromRgb(255, 196, 77))).Color;
+            dialog.Color = System.Drawing.Color.FromArgb(color.A, color.R, color.G, color.B);
+        }
+        catch
+        {
+        }
+        if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
+        _config.HighlightKeywordColor = $"#FF{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
+        _config.Save();
+        RebuildVisibleLyrics();
     }
 
     private void OpenConfig()
@@ -1588,7 +1737,8 @@ internal sealed class OverlayWindow : Window
         RotateTransform Rotate,
         int Direction,
         double Frequency,
-        double Phase);
+        double Phase,
+        double RelativeScale);
 
     private sealed class StandardLineVisual(
         int lineIndex,
