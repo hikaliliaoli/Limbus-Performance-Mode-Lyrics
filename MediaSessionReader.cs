@@ -15,7 +15,8 @@ internal sealed record PlaybackSnapshot(
     string SourceId,
     bool HasReliablePosition,
     string PositionSource,
-    DateTimeOffset PositionCapturedAt);
+    DateTimeOffset PositionCapturedAt,
+    long? SongId);
 
 internal sealed class MediaSessionReader : IDisposable
 {
@@ -84,7 +85,8 @@ internal sealed class MediaSessionReader : IDisposable
                     session.SourceAppUserModelId ?? string.Empty,
                     systemTimelineIsReliable,
                     systemTimelineIsReliable ? "Windows 媒体时间轴" : "未提供",
-                    timeline.LastUpdatedTime));
+                    timeline.LastUpdatedTime,
+                    null));
             }
             catch
             {
@@ -129,7 +131,8 @@ internal sealed class MediaSessionReader : IDisposable
                         "cloudmusic.elog",
                         true,
                         "网易云本地播放日志",
-                        capturedAt)
+                        capturedAt,
+                        elogState.SongId)
                 ];
             }
         }

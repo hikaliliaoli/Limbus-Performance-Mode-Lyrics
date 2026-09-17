@@ -24,26 +24,15 @@ internal sealed class NeteaseApiClient
     public async Task<IReadOnlyList<LyricLine>> GetLyricsAsync(
         string title,
         string artist,
+        long? songId,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<LyricLine> openLyrics = [];
-        try
-        {
-            openLyrics = await GetLrcLibLyricsAsync(title, artist, cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            // Continue with the NetEase web endpoint.
-        }
-
         IReadOnlyList<LyricLine> neteaseLyrics = [];
         try
         {
-            neteaseLyrics = await GetNeteaseLyricsAsync(title, artist, cancellationToken);
+            neteaseLyrics = songId is > 0
+                ? await GetNeteaseLyricsByIdAsync(songId.Value, cancellationToken)
+                : await GetNeteaseLyricsBySearchAsync(title, artist, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -51,22 +40,38 @@ internal sealed class NeteaseApiClient
         }
         catch
         {
-            // LRCLIB remains usable when the NetEase endpoint is unavailable.
+            // LRCLIB is the fallback when the official NetEase lyrics are unavailable.
         }
+        if (neteaseLyrics.Count > 0) return neteaseLyrics;
 
-        if (openLyrics.Count > 0 && neteaseLyrics.Count > 0)
-            return MergeTranslations(openLyrics, neteaseLyrics);
-        return openLyrics.Count > 0 ? openLyrics : neteaseLyrics;
+        try
+        {
+            return await GetLrcLibLyricsAsync(title, artist, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return [];
+        }
     }
 
-    private async Task<IReadOnlyList<LyricLine>> GetNeteaseLyricsAsync(
+    private async Task<IReadOnlyList<LyricLine>> GetNeteaseLyricsBySearchAsync(
         string title,
         string artist,
         CancellationToken cancellationToken)
     {
         var songId = await FindSongIdAsync(title, artist, cancellationToken);
         if (songId is null) return [];
+        return await GetNeteaseLyricsByIdAsync(songId.Value, cancellationToken);
+    }
 
+    private async Task<IReadOnlyList<LyricLine>> GetNeteaseLyricsByIdAsync(
+        long songId,
+        CancellationToken cancellationToken)
+    {
         var url = $"https://music.163.com/api/song/lyric?id={songId}&lv=1&kv=1&tv=1";
         using var response = await _http.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -75,29 +80,6 @@ internal sealed class NeteaseApiClient
         var original = ReadNestedString(root, "lrc", "lyric");
         var translated = ReadNestedString(root, "tlyric", "lyric");
         return LrcParser.Parse(original, translated);
-    }
-
-    private static IReadOnlyList<LyricLine> MergeTranslations(
-        IReadOnlyList<LyricLine> primary,
-        IReadOnlyList<LyricLine> translatedSource)
-    {
-        var translated = translatedSource.Where(x => !string.IsNullOrWhiteSpace(x.Translation)).ToArray();
-        if (translated.Length == 0) return primary;
-
-        return primary.Select(line =>
-        {
-            var nearest = translated
-                .Select(candidate => new
-                {
-                    candidate.Translation,
-                    Distance = Math.Abs((candidate.Time - line.Time).TotalMilliseconds)
-                })
-                .OrderBy(x => x.Distance)
-                .FirstOrDefault();
-            return nearest is not null && nearest.Distance <= 500
-                ? line with { Translation = nearest.Translation }
-                : line;
-        }).ToArray();
     }
 
     private async Task<IReadOnlyList<LyricLine>> GetLrcLibLyricsAsync(

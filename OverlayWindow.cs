@@ -175,7 +175,9 @@ internal sealed class OverlayWindow : Window
                 return;
             }
 
-            var key = $"{snapshot.Title}\n{snapshot.Artist}";
+            var key = snapshot.SongId is > 0
+                ? $"netease:{snapshot.SongId.Value}"
+                : $"{snapshot.Title}\n{snapshot.Artist}";
             if (snapshot.HasReliablePosition)
             {
                 _timelineReliable = true;
@@ -197,12 +199,12 @@ internal sealed class OverlayWindow : Window
                 _nextLyricsRetry = DateTimeOffset.MinValue;
                 ClearAllLyrics();
                 SetTitle(snapshot.Title, snapshot.Artist);
-                BeginLyricsLoad(snapshot.Title, snapshot.Artist, key);
+                BeginLyricsLoad(snapshot.Title, snapshot.Artist, snapshot.SongId, key);
                 return;
             }
 
             if (_lyrics.Count == 0 && !_lyricsLoading && DateTimeOffset.Now >= _nextLyricsRetry)
-                BeginLyricsLoad(snapshot.Title, snapshot.Artist, key);
+                BeginLyricsLoad(snapshot.Title, snapshot.Artist, snapshot.SongId, key);
 
             if (_lyrics.Count > 0)
             {
@@ -226,7 +228,7 @@ internal sealed class OverlayWindow : Window
         }
     }
 
-    private void BeginLyricsLoad(string title, string artist, string expectedSongKey)
+    private void BeginLyricsLoad(string title, string artist, long? songId, string expectedSongKey)
     {
         if (_lyricsLoading && string.Equals(expectedSongKey, _lyricsLoadingSongKey, StringComparison.Ordinal)) return;
         CancelLyricsLoad();
@@ -235,18 +237,19 @@ internal sealed class OverlayWindow : Window
         _lyricsLoading = true;
         _lyricsLoadingSongKey = expectedSongKey;
         ShowStatus("正在获取歌词…", keepTitle: true);
-        _ = LoadLyricsAsync(title, artist, expectedSongKey, cancellation);
+        _ = LoadLyricsAsync(title, artist, songId, expectedSongKey, cancellation);
     }
 
     private async Task LoadLyricsAsync(
         string title,
         string artist,
+        long? songId,
         string expectedSongKey,
         CancellationTokenSource cancellation)
     {
         try
         {
-            var result = await _api.GetLyricsAsync(title, artist, cancellation.Token);
+            var result = await _api.GetLyricsAsync(title, artist, songId, cancellation.Token);
             if (cancellation.IsCancellationRequested || !string.Equals(_songKey, expectedSongKey, StringComparison.Ordinal))
                 return;
 

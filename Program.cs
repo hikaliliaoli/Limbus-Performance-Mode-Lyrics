@@ -204,7 +204,8 @@ internal static class Program
                     candidate.SourceId,
                     candidate.HasReliablePosition,
                     candidate.PositionSource,
-                    candidate.PositionCapturedAt
+                    candidate.PositionCapturedAt,
+                    candidate.SongId
                 })
             });
             if (i < diagnosticSampleCount - 1) await Task.Delay(750);
@@ -215,7 +216,8 @@ internal static class Program
         if (first is not null)
         {
             var client = new NeteaseApiClient();
-            var lyrics = await client.GetLyricsAsync(first.Title, first.Artist, CancellationToken.None);
+            var lyrics = await client.GetLyricsAsync(
+                first.Title, first.Artist, first.SongId, CancellationToken.None);
             lyricCount = lyrics.Count;
             translatedLineCount = lyrics.Count(line => !string.IsNullOrWhiteSpace(line.Translation));
         }
