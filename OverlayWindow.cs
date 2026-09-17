@@ -49,7 +49,7 @@ internal sealed class OverlayWindow : Window
     private Forms.NumericUpDown? _opacityNumber;
     private bool _updatingOpacitySlider;
     private Forms.TrackBar? _fontScaleSlider;
-    private Forms.NumericUpDown? _fontScaleNumber;
+    private Forms.TextBox? _fontScaleText;
     private bool _updatingFontScaleSlider;
 
     private DispatcherTimer _pollTimer = null!;
@@ -738,7 +738,7 @@ internal sealed class OverlayWindow : Window
         var fontScaleMenu = new Forms.ToolStripMenuItem("整体字体大小");
         _fontScaleSlider = new Forms.TrackBar
         {
-            Minimum = 50,
+            Minimum = 10,
             Maximum = 200,
             Value = 100,
             TickFrequency = 25,
@@ -760,13 +760,21 @@ internal sealed class OverlayWindow : Window
             Height = 50,
             Margin = new Forms.Padding(4, 2, 4, 2)
         });
-        _fontScaleNumber = NewPercentageInput(50, 200, 100);
-        _fontScaleNumber.ValueChanged += (_, _) =>
+        _fontScaleText = new Forms.TextBox
         {
-            if (!_updatingFontScaleSlider)
-                Dispatcher.Invoke(() => SetFontScale((int)_fontScaleNumber.Value));
+            Text = "100",
+            Width = 82,
+            TextAlign = Forms.HorizontalAlignment.Right
         };
-        fontScaleMenu.DropDownItems.Add(NewPercentageInputHost(_fontScaleNumber));
+        _fontScaleText.KeyDown += (_, eventArgs) =>
+        {
+            if (eventArgs.KeyCode != Forms.Keys.Enter) return;
+            Dispatcher.Invoke(CommitFontScaleText);
+            eventArgs.SuppressKeyPress = true;
+        };
+        _fontScaleText.Validated += (_, _) => Dispatcher.Invoke(CommitFontScaleText);
+        fontScaleMenu.DropDownItems.Add(NewPercentageInputHost(_fontScaleText));
+        fontScaleMenu.DropDownOpening += (_, _) => Dispatcher.Invoke(RefreshMenuChecks);
         appearanceMenu.DropDownItems.Add(fontScaleMenu);
         var opacityMenu = new Forms.ToolStripMenuItem("歌词透明度");
         _opacitySlider = new Forms.TrackBar
@@ -800,6 +808,7 @@ internal sealed class OverlayWindow : Window
                 Dispatcher.Invoke(() => SetLyricOpacity((int)_opacityNumber.Value));
         };
         opacityMenu.DropDownItems.Add(NewPercentageInputHost(_opacityNumber));
+        opacityMenu.DropDownOpening += (_, _) => Dispatcher.Invoke(RefreshMenuChecks);
         appearanceMenu.DropDownItems.Add(opacityMenu);
         menu.Items.Add(appearanceMenu);
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -898,12 +907,13 @@ internal sealed class OverlayWindow : Window
             if (_opacityNumber is not null) _opacityNumber.Value = opacityPercentage;
             _updatingOpacitySlider = false;
         }
-        var fontScalePercentage = (int)Math.Round(Math.Clamp(_config.FontScale, 0.5, 2.0) * 100);
+        var fontScalePercentage = Math.Max(0.01, _config.FontScale * 100);
         if (_fontScaleSlider is not null)
         {
             _updatingFontScaleSlider = true;
-            _fontScaleSlider.Value = fontScalePercentage;
-            if (_fontScaleNumber is not null) _fontScaleNumber.Value = fontScalePercentage;
+            _fontScaleSlider.Value = (int)Math.Round(Math.Clamp(fontScalePercentage, 10, 200));
+            if (_fontScaleText is not null && !_fontScaleText.Focused)
+                _fontScaleText.Text = FormatPercentage(fontScalePercentage);
             _updatingFontScaleSlider = false;
         }
     }
@@ -931,14 +941,15 @@ internal sealed class OverlayWindow : Window
         _config.Save();
     }
 
-    private void SetFontScale(int percentage)
+    private void SetFontScale(double percentage)
     {
-        percentage = Math.Clamp(percentage, 50, 200);
+        if (!double.IsFinite(percentage) || percentage <= 0) return;
         _updatingFontScaleSlider = true;
-        if (_fontScaleSlider is not null && _fontScaleSlider.Value != percentage)
-            _fontScaleSlider.Value = percentage;
-        if (_fontScaleNumber is not null && _fontScaleNumber.Value != percentage)
-            _fontScaleNumber.Value = percentage;
+        var sliderValue = (int)Math.Round(Math.Clamp(percentage, 10, 200));
+        if (_fontScaleSlider is not null && _fontScaleSlider.Value != sliderValue)
+            _fontScaleSlider.Value = sliderValue;
+        if (_fontScaleText is not null)
+            _fontScaleText.Text = FormatPercentage(percentage);
         _updatingFontScaleSlider = false;
         _config.FontScale = percentage / 100.0;
         _config.Save();
@@ -948,16 +959,38 @@ internal sealed class OverlayWindow : Window
         if (_lyrics.Count > 0 && _clockInitialized) EnsureActiveLine(CurrentPlaybackPosition());
     }
 
+    private void CommitFontScaleText()
+    {
+        if (_fontScaleText is null || _updatingFontScaleSlider) return;
+        var input = _fontScaleText.Text.Trim().TrimEnd('%').Trim();
+        if ((double.TryParse(input, NumberStyles.Float, CultureInfo.CurrentCulture, out var percentage) ||
+             double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out percentage)) &&
+            double.IsFinite(percentage) && percentage > 0)
+        {
+            SetFontScale(percentage);
+            return;
+        }
+
+        _fontScaleText.Text = FormatPercentage(Math.Max(0.01, _config.FontScale * 100));
+    }
+
+    private static string FormatPercentage(double percentage) =>
+        percentage.ToString("0.##", CultureInfo.CurrentCulture);
+
     private double ScaledCurrentFontSize =>
-        _config.CurrentFontSize * Math.Clamp(_config.FontScale, 0.5, 2.0);
+        SafeFontSize(_config.CurrentFontSize * EffectiveFontScale);
 
     private double ScaledContextFontSize =>
-        _config.ContextFontSize * Math.Clamp(_config.FontScale, 0.5, 2.0);
+        SafeFontSize(_config.ContextFontSize * EffectiveFontScale);
+
+    private double EffectiveFontScale =>
+        double.IsFinite(_config.FontScale) && _config.FontScale > 0 ? _config.FontScale : 1.0;
+
+    private static double SafeFontSize(double value) => Math.Clamp(value, 0.1, 35_000);
 
     private void ApplyConfiguredFontSizes()
     {
-        var scale = Math.Clamp(_config.FontScale, 0.5, 2.0);
-        _title.FontSize = Math.Max(6, (_config.ContextFontSize - 2) * scale);
+        _title.FontSize = SafeFontSize((_config.ContextFontSize - 2) * EffectiveFontScale);
         _previous.FontSize = ScaledContextFontSize;
         _next.FontSize = ScaledContextFontSize;
         _status.FontSize = ScaledCurrentFontSize;
@@ -975,7 +1008,7 @@ internal sealed class OverlayWindow : Window
         ThousandsSeparator = false
     };
 
-    private static Forms.ToolStripControlHost NewPercentageInputHost(Forms.NumericUpDown input)
+    private static Forms.ToolStripControlHost NewPercentageInputHost(Forms.Control input)
     {
         var panel = new Forms.FlowLayoutPanel
         {
