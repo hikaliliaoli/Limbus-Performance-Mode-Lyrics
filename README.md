@@ -90,29 +90,6 @@
 
 先退出程序，删除该文件，再次启动即可生成默认配置。导入的字体位于同一配置目录。
 
-## 给开发者
-
-源码使用 .NET 9、WPF 和 Windows Forms 托盘菜单。开发环境需要安装 .NET 9 SDK。
-
-```powershell
-git clone https://github.com/hikaliliaoli/Limbus-Performance-Mode-Lyrics.git
-cd Limbus-Performance-Mode-Lyrics
-git switch dev-0.1.0
-dotnet build -c Release
-```
-
-生成可分发目录和 ZIP：
-
-```powershell
-.\publish.ps1
-```
-
-也可以直接双击 `publish.cmd`。生成结果为：
-
-```text
-publish\win-x64\
-Limbus-Performance-Mode-Lyrics-dev-0.1.0-win-x64.zip
-```
 
 ## 许可证
 
