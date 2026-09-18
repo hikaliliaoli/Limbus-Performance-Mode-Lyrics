@@ -465,15 +465,6 @@ internal sealed class OverlayWindow : Window
     private void AnimateStandard(TimeSpan position)
     {
         if (_standardLines.Count == 0 || _activeLineIndex < 0) return;
-        if (!UsesLimbusAnimation())
-        {
-            foreach (var line in _standardLines)
-            {
-                SetGlyphsStatic(line.Glyphs);
-                line.Container.Opacity = 1;
-            }
-            return;
-        }
         var current = _standardLines[^1];
         var currentDuration = Math.Max(0.65, (current.End - current.Start).TotalSeconds);
         var currentProgress = Math.Clamp((position - current.Start).TotalSeconds / currentDuration, 0, 1);
@@ -483,8 +474,15 @@ internal sealed class OverlayWindow : Window
 
         foreach (var line in _standardLines)
         {
-            var timing = CalculatePerformanceTiming(position, line.Start, line.End, line.Glyphs.Count);
-            AnimateGlyphs(line.Glyphs, timing, useIndividualDrift: true);
+            if (UsesLimbusAnimation())
+            {
+                var timing = CalculatePerformanceTiming(position, line.Start, line.End, line.Glyphs.Count);
+                AnimateGlyphs(line.Glyphs, timing, useIndividualDrift: true);
+            }
+            else
+            {
+                SetGlyphsStatic(line.Glyphs);
+            }
             var opacity = 1.0;
             if (ReferenceEquals(line, fadingLine))
             {
@@ -566,18 +564,6 @@ internal sealed class OverlayWindow : Window
     private void AnimatePerformance(TimeSpan position)
     {
         if (_performanceLines.Count == 0) return;
-        if (!UsesLimbusAnimation())
-        {
-            foreach (var line in _performanceLines)
-            {
-                SetGlyphsStatic(line.Glyphs);
-                line.Container.Opacity = 1;
-                line.Translate.X = 0;
-                line.Translate.Y = 0;
-                line.Rotate.Angle = 0;
-            }
-            return;
-        }
         var current = _performanceLines[^1];
         var currentDuration = Math.Max(0.65, (current.End - current.Start).TotalSeconds);
         var currentProgress = Math.Clamp((position - current.Start).TotalSeconds / currentDuration, 0, 1);
@@ -605,14 +591,24 @@ internal sealed class OverlayWindow : Window
 
             var duration = Math.Max(0.65, (line.End - line.Start).TotalSeconds);
             var progress = Math.Clamp((position - line.Start).TotalSeconds / duration, 0, 1);
-            var timing = CalculatePerformanceTiming(position, line.Start, line.End, line.Glyphs.Count);
-            AnimateGlyphs(line.Glyphs, timing, useIndividualDrift: false);
             line.Container.Opacity = opacity;
-            line.Translate.X = Math.Sin(motionTime * 0.8 + line.LineIndex) * ScaledMotionPixels(1.5);
-            line.Translate.Y = line.Direction * ScaledMotionPixels(_config.PerformanceRisePixels) * progress +
-                               Math.Sin(motionTime * 1.1 + line.LineIndex * 0.7) * ScaledMotionPixels(1.2);
-            line.Rotate.Angle = line.BaseAngle + line.Direction * 0.65 * progress +
-                                Math.Sin(motionTime * 0.7 + line.LineIndex) * 0.12;
+            if (UsesLimbusAnimation())
+            {
+                var timing = CalculatePerformanceTiming(position, line.Start, line.End, line.Glyphs.Count);
+                AnimateGlyphs(line.Glyphs, timing, useIndividualDrift: false);
+                line.Translate.X = Math.Sin(motionTime * 0.8 + line.LineIndex) * ScaledMotionPixels(1.5);
+                line.Translate.Y = line.Direction * ScaledMotionPixels(_config.PerformanceRisePixels) * progress +
+                                   Math.Sin(motionTime * 1.1 + line.LineIndex * 0.7) * ScaledMotionPixels(1.2);
+                line.Rotate.Angle = line.BaseAngle + line.Direction * 0.65 * progress +
+                                    Math.Sin(motionTime * 0.7 + line.LineIndex) * 0.12;
+            }
+            else
+            {
+                SetGlyphsStatic(line.Glyphs);
+                line.Translate.X = 0;
+                line.Translate.Y = 0;
+                line.Rotate.Angle = 0;
+            }
         }
     }
 
