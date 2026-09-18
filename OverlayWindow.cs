@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
@@ -40,6 +41,7 @@ internal sealed class OverlayWindow : Window
 
     private readonly MediaSessionReader _media = new();
     private readonly NeteaseApiClient _api = new();
+    private readonly System.Drawing.Icon _applicationIcon;
     private readonly Forms.NotifyIcon _tray;
     private Forms.ToolStripMenuItem? _nowPlayingItem;
     private Forms.ToolStripMenuItem? _syncStatusItem;
@@ -118,6 +120,8 @@ internal sealed class OverlayWindow : Window
         ShowActivated = false;
         Focusable = false;
         SnapsToDevicePixels = true;
+        Icon = BitmapFrame.Create(
+            new Uri("pack://application:,,,/Assets/AppIcon.ico", UriKind.Absolute));
 
         var currentHost = new Grid { HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch };
         currentHost.Children.Add(_status);
@@ -131,6 +135,7 @@ internal sealed class OverlayWindow : Window
         _root.Background = System.Windows.Media.Brushes.Transparent;
         Content = _root;
 
+        _applicationIcon = LoadApplicationIcon();
         _tray = BuildTrayIcon();
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -1060,10 +1065,21 @@ internal sealed class OverlayWindow : Window
         return new Forms.NotifyIcon
         {
             Text = "网易云歌词悬浮层",
-            Icon = System.Drawing.SystemIcons.Information,
+            Icon = _applicationIcon,
             ContextMenuStrip = menu,
             Visible = true
         };
+    }
+
+    private static System.Drawing.Icon LoadApplicationIcon()
+    {
+        var executablePath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(executablePath))
+        {
+            var icon = System.Drawing.Icon.ExtractAssociatedIcon(executablePath);
+            if (icon is not null) return icon;
+        }
+        return (System.Drawing.Icon)System.Drawing.SystemIcons.Application.Clone();
     }
 
     private void UpdateNowPlayingMenu(string? title, string? artist)
@@ -1766,6 +1782,7 @@ internal sealed class OverlayWindow : Window
         _windowSource = null;
         _tray.Visible = false;
         _tray.Dispose();
+        _applicationIcon.Dispose();
     }
 
     private void CancelLyricsLoad()
