@@ -1,5 +1,5 @@
 {
-  "ConfigVersion": 8,
+  "ConfigVersion": 9,
   "Left": -1,
   "Top": -1,
   "Width": 1200,
@@ -26,6 +26,7 @@
   "LyricOffsetMilliseconds": 0,
   "PollIntervalMilliseconds": 250,
   "AnimationFps": 45,
+  "AnimationStyle": 1,
   "CharactersPerSecond": 13,
   "CharacterFadeInMilliseconds": 170,
   "LineFadeOutMilliseconds": 650,

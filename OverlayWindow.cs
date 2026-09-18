@@ -47,6 +47,8 @@ internal sealed class OverlayWindow : Window
     private Forms.ToolStripMenuItem? _translationLanguageItem;
     private Forms.ToolStripMenuItem? _standardModeItem;
     private Forms.ToolStripMenuItem? _performanceModeItem;
+    private Forms.ToolStripMenuItem? _noAnimationItem;
+    private Forms.ToolStripMenuItem? _limbusAnimationItem;
     private Forms.ToolStripMenuItem? _positionLockItem;
     private Forms.ToolStripMenuItem? _visibleLyricsMenu;
     private Forms.TrackBar? _visibleLyricsSlider;
@@ -94,13 +96,18 @@ internal sealed class OverlayWindow : Window
     private bool _demoMode;
     private readonly bool _startInDemo;
     private readonly string? _startupModeOverride;
+    private readonly int? _startupAnimationStyleOverride;
     private HwndSource? _windowSource;
     private StandardLineVisual? _draggingStandardLine;
 
-    public OverlayWindow(bool startInDemo = false, string? startupModeOverride = null)
+    public OverlayWindow(
+        bool startInDemo = false,
+        string? startupModeOverride = null,
+        int? startupAnimationStyleOverride = null)
     {
         _startInDemo = startInDemo;
         _startupModeOverride = startupModeOverride;
+        _startupAnimationStyleOverride = startupAnimationStyleOverride;
         Title = "网易云歌词悬浮层";
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -141,6 +148,11 @@ internal sealed class OverlayWindow : Window
         {
             _config.DisplayMode = _startupModeOverride;
             ApplyWindowMode();
+            RefreshMenuChecks();
+        }
+        if (_startupAnimationStyleOverride is not null)
+        {
+            _config.AnimationStyle = Math.Clamp(_startupAnimationStyleOverride.Value, 0, 1);
             RefreshMenuChecks();
         }
         _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_config.PollIntervalMilliseconds) };
@@ -453,6 +465,15 @@ internal sealed class OverlayWindow : Window
     private void AnimateStandard(TimeSpan position)
     {
         if (_standardLines.Count == 0 || _activeLineIndex < 0) return;
+        if (!UsesLimbusAnimation())
+        {
+            foreach (var line in _standardLines)
+            {
+                SetGlyphsStatic(line.Glyphs);
+                line.Container.Opacity = 1;
+            }
+            return;
+        }
         var current = _standardLines[^1];
         var currentDuration = Math.Max(0.65, (current.End - current.Start).TotalSeconds);
         var currentProgress = Math.Clamp((position - current.Start).TotalSeconds / currentDuration, 0, 1);
@@ -523,7 +544,9 @@ internal sealed class OverlayWindow : Window
         Canvas.SetLeft(container, x);
         Canvas.SetTop(container, y);
         var direction = random.Next(0, 2) == 0 ? -1 : 1;
-        var baseAngle = (random.NextDouble() * 2 - 1) * _config.PerformanceTiltDegrees;
+        var baseAngle = UsesLimbusAnimation()
+            ? (random.NextDouble() * 2 - 1) * _config.PerformanceTiltDegrees
+            : 0;
         var rotate = new RotateTransform(baseAngle);
         var translate = new TranslateTransform();
         var transforms = new TransformGroup();
@@ -543,6 +566,18 @@ internal sealed class OverlayWindow : Window
     private void AnimatePerformance(TimeSpan position)
     {
         if (_performanceLines.Count == 0) return;
+        if (!UsesLimbusAnimation())
+        {
+            foreach (var line in _performanceLines)
+            {
+                SetGlyphsStatic(line.Glyphs);
+                line.Container.Opacity = 1;
+                line.Translate.X = 0;
+                line.Translate.Y = 0;
+                line.Rotate.Angle = 0;
+            }
+            return;
+        }
         var current = _performanceLines[^1];
         var currentDuration = Math.Max(0.65, (current.End - current.Start).TotalSeconds);
         var currentProgress = Math.Clamp((position - current.Start).TotalSeconds / currentDuration, 0, 1);
@@ -650,6 +685,17 @@ internal sealed class OverlayWindow : Window
         }
     }
 
+    private static void SetGlyphsStatic(IEnumerable<AnimatedGlyph> glyphs)
+    {
+        foreach (var glyph in glyphs)
+        {
+            glyph.Text.Opacity = 1;
+            glyph.Translate.X = 0;
+            glyph.Translate.Y = 0;
+            glyph.Rotate.Angle = 0;
+        }
+    }
+
     private void CreateGlyphs(StackPanel panel, List<AnimatedGlyph> target, string text, int lineIndex)
     {
         var units = KeywordSelector.BuildAnimationUnits(text, GetKeywordSpans(lineIndex));
@@ -671,7 +717,7 @@ internal sealed class OverlayWindow : Window
                 Foreground = unit.IsHighlighted
                     ? ParseBrush(_config.HighlightKeywordColor, System.Windows.Media.Color.FromRgb(255, 196, 77))
                     : ParseBrush(_config.CurrentColor, Colors.White),
-                Opacity = 0,
+                Opacity = UsesLimbusAnimation() ? 0 : 1,
                 RenderTransformOrigin = new Point(0.5, 0.5),
                 RenderTransform = transforms,
                 Effect = CreateShadow(relativeScale)
@@ -802,6 +848,8 @@ internal sealed class OverlayWindow : Window
     private bool IsPerformanceMode() =>
         string.Equals(_config.DisplayMode, "Performance", StringComparison.OrdinalIgnoreCase);
 
+    private bool UsesLimbusAnimation() => _config.AnimationStyle == 1;
+
     private System.Windows.Media.Effects.DropShadowEffect CreateShadow(double relativeScale = 1.0) => new()
     {
         Color = ((SolidColorBrush)ParseBrush(_config.ShadowColor, Colors.Black)).Color,
@@ -832,6 +880,16 @@ internal sealed class OverlayWindow : Window
         modeMenu.DropDownItems.Add(_standardModeItem);
         modeMenu.DropDownItems.Add(_performanceModeItem);
         menu.Items.Add(modeMenu);
+
+        var animationMenu = new Forms.ToolStripMenuItem("动画选择");
+        _noAnimationItem = new Forms.ToolStripMenuItem(
+            "0：无动画", null, (_, _) => Dispatcher.Invoke(() => SetAnimationStyle(0)));
+        _limbusAnimationItem = new Forms.ToolStripMenuItem(
+            "1：Limbus演出", null, (_, _) => Dispatcher.Invoke(() => SetAnimationStyle(1)));
+        animationMenu.DropDownItems.Add(_noAnimationItem);
+        animationMenu.DropDownItems.Add(_limbusAnimationItem);
+        animationMenu.DropDownOpening += (_, _) => Dispatcher.Invoke(RefreshMenuChecks);
+        menu.Items.Add(animationMenu);
 
         _visibleLyricsMenu = new Forms.ToolStripMenuItem("屏幕歌词数量");
         _visibleLyricsSlider = new Forms.TrackBar
@@ -995,8 +1053,6 @@ internal sealed class OverlayWindow : Window
         menu.Items.Add(appearanceMenu);
         menu.Items.Add(new Forms.ToolStripSeparator());
 
-        menu.Items.Add("动画效果预览", null, (_, _) => Dispatcher.Invoke(StartDemo));
-        menu.Items.Add("返回网易云同步", null, (_, _) => Dispatcher.Invoke(ReturnToNetease));
         menu.Items.Add("歌词提前 0.5 秒", null, (_, _) => Dispatcher.Invoke(() => ShiftLyricOffset(500)));
         menu.Items.Add("歌词延后 0.5 秒", null, (_, _) => Dispatcher.Invoke(() => ShiftLyricOffset(-500)));
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -1074,6 +1130,8 @@ internal sealed class OverlayWindow : Window
             _translationLanguageItem.Checked = string.Equals(_config.LyricLanguage, "Translation", StringComparison.OrdinalIgnoreCase);
         if (_standardModeItem is not null) _standardModeItem.Checked = !IsPerformanceMode();
         if (_performanceModeItem is not null) _performanceModeItem.Checked = IsPerformanceMode();
+        if (_noAnimationItem is not null) _noAnimationItem.Checked = !UsesLimbusAnimation();
+        if (_limbusAnimationItem is not null) _limbusAnimationItem.Checked = UsesLimbusAnimation();
         if (_visibleLyricsMenu is not null)
             _visibleLyricsMenu.Text = $"屏幕歌词数量（最多 {VisibleLyricsLimit} 条）";
         if (_visibleLyricsSlider is not null)
@@ -1133,6 +1191,16 @@ internal sealed class OverlayWindow : Window
         _config.Save();
         UpdateInteractionMode();
         RefreshMenuChecks();
+    }
+
+    private void SetAnimationStyle(int style)
+    {
+        style = Math.Clamp(style, 0, 1);
+        if (_config.AnimationStyle == style) return;
+        _config.AnimationStyle = style;
+        _config.Save();
+        RefreshMenuChecks();
+        RebuildVisibleLyrics();
     }
 
     private void ToggleKeywordHighlighting()
@@ -1639,19 +1707,6 @@ internal sealed class OverlayWindow : Window
         ClearAllLyrics();
         UpdateNowPlayingMenu("演出动画预览", string.Empty);
         EnsureActiveLine(TimeSpan.Zero);
-    }
-
-    private async void ReturnToNetease()
-    {
-        _demoMode = false;
-        _songKey = string.Empty;
-        _lyrics = [];
-        _clockInitialized = false;
-        _timelineReliable = false;
-        _activeLineIndex = int.MinValue;
-        _nextLyricsRetry = DateTimeOffset.MinValue;
-        ClearAllLyrics();
-        await PollMediaAsync();
     }
 
     private void ShiftLyricOffset(int deltaMilliseconds)

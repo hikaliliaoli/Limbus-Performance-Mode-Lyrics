@@ -6,7 +6,7 @@ namespace NeteaseLyricsOverlay;
 
 internal sealed class OverlayConfig
 {
-    public int ConfigVersion { get; set; } = 8;
+    public int ConfigVersion { get; set; } = 9;
     public double Left { get; set; } = -1;
     public double Top { get; set; } = -1;
     public double Width { get; set; } = 1200;
@@ -33,6 +33,7 @@ internal sealed class OverlayConfig
     public int LyricOffsetMilliseconds { get; set; } = 0;
     public int PollIntervalMilliseconds { get; set; } = 250;
     public int AnimationFps { get; set; } = 45;
+    public int AnimationStyle { get; set; } = 1;
     public double CharactersPerSecond { get; set; } = 13;
     public int CharacterFadeInMilliseconds { get; set; } = 170;
     public int LineFadeOutMilliseconds { get; set; } = 650;
@@ -82,7 +83,9 @@ internal sealed class OverlayConfig
             if (savedVersion < 6) config.ApplyVersion6Defaults();
             if (savedVersion < 7) config.ApplyVersion7Defaults();
             if (savedVersion < 8) config.ApplyVersion8Defaults();
+            if (savedVersion < 9) config.ApplyVersion9Defaults();
             config.MaxVisibleLyrics = Math.Clamp(config.MaxVisibleLyrics, 1, 10);
+            config.AnimationStyle = Math.Clamp(config.AnimationStyle, 0, 1);
             config.HighlightKeywordScale = Math.Clamp(
                 double.IsFinite(config.HighlightKeywordScale) ? config.HighlightKeywordScale : 1.4,
                 1.0,
@@ -93,7 +96,7 @@ internal sealed class OverlayConfig
                 position.X = NormalizePosition(position.X);
                 position.Y = NormalizePosition(position.Y);
             }
-            if (savedVersion < 8) config.Save();
+            if (savedVersion < 9) config.Save();
             return config;
         }
         catch
@@ -174,6 +177,12 @@ internal sealed class OverlayConfig
         HighlightKeywordsEnabled = true;
         HighlightKeywordScale = 1.4;
         HighlightKeywordColor = "#FFFFC44D";
+    }
+
+    private void ApplyVersion9Defaults()
+    {
+        ConfigVersion = 9;
+        AnimationStyle = 1;
     }
 
     private static double NormalizePosition(double value) =>

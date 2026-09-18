@@ -69,7 +69,12 @@ internal static class Program
         var startInDemo = performanceDemo || standardDemo ||
                           args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
         var startupMode = performanceDemo ? "Performance" : standardDemo ? "Standard" : null;
-        var window = new OverlayWindow(startInDemo, startupMode);
+        var startupAnimationStyle = args.Contains("--animation-none", StringComparer.OrdinalIgnoreCase)
+            ? 0
+            : args.Contains("--animation-limbus", StringComparer.OrdinalIgnoreCase)
+                ? 1
+                : (int?)null;
+        var window = new OverlayWindow(startInDemo, startupMode, startupAnimationStyle);
         if (shutdownTest)
         {
             window.Loaded += async (_, _) =>
@@ -155,10 +160,25 @@ internal static class Program
         var japaneseVerbKeywords = KeywordSelector.Select(japaneseVerbLyrics, "self-test-japanese-verbs")
             .SelectMany(pair => pair.Value)
             .ToArray();
-        if (japaneseVerbKeywords.Length != 2 ||
+        if (japaneseVerbKeywords.Length < 2 ||
             japaneseVerbKeywords.Any(span => span.Length != 1 || !span.Text.All(IsHanForSelfTest)))
         {
             Environment.ExitCode = 10;
+        }
+
+        var japaneseDenseLyrics = new[]
+        {
+            "青い空を越えて赤い花が咲く",
+            "月を見ながら遠い夢を抱く",
+            "声を重ねて夜の道を歩く"
+        };
+        var japaneseDenseKeywords = KeywordSelector.Select(
+                japaneseDenseLyrics, "self-test-japanese-density")
+            .SelectMany(pair => pair.Value)
+            .ToArray();
+        if (japaneseDenseKeywords.Length < 4)
+        {
+            Environment.ExitCode = 11;
         }
 
         var englishLyrics = new[]

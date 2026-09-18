@@ -88,8 +88,93 @@ internal static class KeywordSelector
             start += size;
             groupNumber++;
         }
+        AddJapaneseDensityHighlights(lines, result, stableSeed);
         return result;
     }
+
+    private static void AddJapaneseDensityHighlights(
+        IReadOnlyList<string> lines,
+        Dictionary<int, IReadOnlyList<KeywordSpan>> result,
+        string stableSeed)
+    {
+        if (!lines.Any(line => line.Any(character => IsHiragana(character) || IsKatakana(character)))) return;
+
+        var words = ExtractJapaneseHanWords(lines);
+        if (words.Count < 5) return;
+        var frequencies = words
+            .SelectMany(word => word.Text.Where(IsHan))
+            .GroupBy(character => character)
+            .ToDictionary(group => group.Key, group => group.Count());
+
+        for (var blockStart = 0; blockStart + 5 <= words.Count; blockStart += 5)
+        {
+            var options = words
+                .Skip(blockStart)
+                .Take(5)
+                .SelectMany(word => word.Text
+                    .Select((character, offset) => new { character, offset })
+                    .Where(item => IsHan(item.character))
+                    .Select(item => new
+                    {
+                        Word = word,
+                        Character = item.character,
+                        AbsoluteStart = word.Start + item.offset,
+                        Offset = item.offset
+                    }))
+                .Where(option => !OverlapsExisting(
+                    result.GetValueOrDefault(option.Word.LineIndex), option.AbsoluteStart))
+                .OrderByDescending(option =>
+                    (MeaningfulSingleHan.Contains(option.Character.ToString()) ? 1.2 : 0) +
+                    (option.Offset + 1 < option.Word.Text.Length &&
+                     IsHiragana(option.Word.Text[option.Offset + 1]) ? 0.8 : 0) +
+                    Math.Min(frequencies.GetValueOrDefault(option.Character), 4) * 0.2 +
+                    StableHash($"{stableSeed}|japanese-density|{blockStart}|" +
+                               $"{option.Word.LineIndex}|{option.AbsoluteStart}") % 100 / 500.0)
+                .FirstOrDefault();
+            if (options is null) continue;
+
+            var spans = result.GetValueOrDefault(options.Word.LineIndex)?.ToList() ?? [];
+            spans.Add(new KeywordSpan(options.AbsoluteStart, 1, options.Character.ToString()));
+            result[options.Word.LineIndex] = spans.OrderBy(span => span.Start).ToArray();
+        }
+    }
+
+    private static List<JapaneseHanWord> ExtractJapaneseHanWords(IReadOnlyList<string> lines)
+    {
+        var result = new List<JapaneseHanWord>();
+        try
+        {
+            var segmenter = new WordsSegmenter("ja-JP");
+            for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+            {
+                foreach (var token in segmenter.GetTokens(lines[lineIndex]))
+                {
+                    if (!token.Text.Any(IsHan)) continue;
+                    result.Add(new JapaneseHanWord(
+                        lineIndex,
+                        checked((int)token.SourceTextSegment.StartPosition),
+                        token.Text));
+                }
+            }
+            return result;
+        }
+        catch
+        {
+            for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+            {
+                var text = lines[lineIndex];
+                for (var index = 0; index < text.Length; index++)
+                {
+                    if (!IsHan(text[index])) continue;
+                    result.Add(new JapaneseHanWord(lineIndex, index, text[index].ToString()));
+                }
+            }
+            return result;
+        }
+    }
+
+    private static bool OverlapsExisting(IReadOnlyList<KeywordSpan>? spans, int position) =>
+        spans is not null && spans.Any(span => position >= span.Start && position < span.Start + span.Length);
 
     public static IReadOnlyList<LyricAnimationUnit> BuildAnimationUnits(
         string text,
@@ -376,4 +461,6 @@ internal static class KeywordSelector
         string Text,
         string Normalized,
         double BaseScore);
+
+    private sealed record JapaneseHanWord(int LineIndex, int Start, string Text);
 }
