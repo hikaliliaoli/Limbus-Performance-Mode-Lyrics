@@ -28,6 +28,13 @@ internal static class KeywordSelector
         "イル", "アル", "ナル", "ナイ", "デス", "マス", "カラ", "マデ", "ヨリ", "コト", "モノ"
     };
 
+    private static readonly HashSet<string> JapaneseParticleOnlyRuns = new(StringComparer.Ordinal)
+    {
+        "は", "が", "を", "に", "へ", "と", "も", "の", "で", "や", "か", "ね", "よ", "ぞ", "さ",
+        "から", "まで", "より", "には", "では", "とは", "へと", "でも", "しか", "だけ", "ほど", "って",
+        "です", "でした", "だ", "だった", "じゃない"
+    };
+
     private static readonly HashSet<string> MeaningfulSingleHan = new(StringComparer.Ordinal)
     {
         "爱", "愛", "梦", "夢", "光", "夜", "心", "火", "风", "風", "雨", "雪", "海", "空",
@@ -131,9 +138,11 @@ internal static class KeywordSelector
                 else
                     AddEnglishToken(result, token.Text, start, lineIndex);
             }
+            if (language == LyricLanguage.Japanese)
+                AddJapaneseVerbStemKanji(result, text, lineIndex);
             return result
                 .GroupBy(candidate => (candidate.Start, candidate.Length))
-                .Select(group => group.First())
+                .Select(group => group.MaxBy(candidate => candidate.BaseScore)!)
                 .ToList();
         }
         catch
@@ -151,7 +160,11 @@ internal static class KeywordSelector
         if (language == LyricLanguage.Japanese)
         {
             AddJapaneseRuns(result, text, 0, lineIndex);
-            return result;
+            AddJapaneseVerbStemKanji(result, text, lineIndex);
+            return result
+                .GroupBy(candidate => (candidate.Start, candidate.Length))
+                .Select(group => group.MaxBy(candidate => candidate.BaseScore)!)
+                .ToList();
         }
         if (language == LyricLanguage.Chinese)
         {
@@ -229,6 +242,26 @@ internal static class KeywordSelector
                 result.Add(NewCandidate(lineIndex, tokenStart + start, run,
                     1.1 + Math.Min(run.Length, 6) * 0.16));
             }
+        }
+    }
+
+    private static void AddJapaneseVerbStemKanji(
+        List<Candidate> result,
+        string text,
+        int lineIndex)
+    {
+        for (var index = 0; index + 1 < text.Length; index++)
+        {
+            if (!IsHan(text[index]) || !IsHiragana(text[index + 1])) continue;
+            if (index > 0 && IsHan(text[index - 1])) continue;
+
+            var suffixEnd = index + 1;
+            while (suffixEnd < text.Length && IsHiragana(text[suffixEnd])) suffixEnd++;
+            var hiraganaSuffix = text[(index + 1)..suffixEnd];
+            if (JapaneseParticleOnlyRuns.Contains(hiraganaSuffix)) continue;
+
+            var stem = text[index].ToString();
+            result.Add(NewCandidate(lineIndex, index, stem, 2.25));
         }
     }
 

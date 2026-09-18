@@ -146,6 +146,21 @@ internal static class Program
             Environment.ExitCode = 8;
         }
 
+        var japaneseVerbLyrics = new[]
+        {
+            "飲み込んでしまえばもう",
+            "眠れない夜を越えて",
+            "会いたいを認めざるを得ない"
+        };
+        var japaneseVerbKeywords = KeywordSelector.Select(japaneseVerbLyrics, "self-test-japanese-verbs")
+            .SelectMany(pair => pair.Value)
+            .ToArray();
+        if (japaneseVerbKeywords.Length != 2 ||
+            japaneseVerbKeywords.Any(span => span.Length != 1 || !span.Text.All(IsHanForSelfTest)))
+        {
+            Environment.ExitCode = 10;
+        }
+
         var englishLyrics = new[]
         {
             "Carry the final flame through endless night",
