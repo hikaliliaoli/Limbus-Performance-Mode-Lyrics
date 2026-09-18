@@ -93,7 +93,7 @@
 
 ## 开发者名单
 
-hikaliliaoli  ice 拉来耶炖菜
+hikaliliaoli  notayet 拉来耶炖菜
 
 ## 许可证
 
